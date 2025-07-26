@@ -60,6 +60,9 @@ pub mod immutables {
         // hashlock: 32 bytes
         bytes.extend_from_array(&immutables.hashlock.to_array());
         
+        // CRITICAL: Only include EVM addresses in hash for cross-chain compatibility
+        // Solidity contracts only know about EVM addresses, not Stellar addresses
+        
         // maker: 20-byte EVM address, padded to 32 bytes
         let mut maker_padded = [0u8; 32];
         maker_padded[12..32].copy_from_slice(&immutables.maker.evm.to_array());
@@ -87,43 +90,13 @@ pub mod immutables {
         deposit_padded[16..32].copy_from_slice(&deposit_bytes);
         bytes.extend_from_array(&deposit_padded);
         
-        // timelocks: 36 bytes packed (all 7 fields included)
-        let timelocks_bytes = pack_timelocks(&immutables.timelocks);
+        // timelocks: 32 bytes packed (exactly matching Solidity uint256)
+        let timelocks_bytes = immutables.timelocks.to_bytes(env);
         bytes.extend_from_array(&timelocks_bytes);
 
         Ok(env.crypto().keccak256(&bytes).into())
     }
 
-    /// Packs Timelocks to 36 bytes to include all 7 timelock fields
-    fn pack_timelocks(timelocks: &Timelocks) -> [u8; 36] {
-        let mut bytes = [0u8; 36];
-        
-        // deployed_at: u64 (8 bytes, offset 0)
-        bytes[0..8].copy_from_slice(&timelocks.deployed_at.to_be_bytes());
-        
-        // src_withdrawal: u32 (4 bytes, offset 8)
-        bytes[8..12].copy_from_slice(&timelocks.src_withdrawal.to_be_bytes());
-        
-        // src_public_withdrawal: u32 (4 bytes, offset 12)
-        bytes[12..16].copy_from_slice(&timelocks.src_public_withdrawal.to_be_bytes());
-        
-        // src_cancellation: u32 (4 bytes, offset 16)
-        bytes[16..20].copy_from_slice(&timelocks.src_cancellation.to_be_bytes());
-        
-        // src_public_cancellation: u32 (4 bytes, offset 20)
-        bytes[20..24].copy_from_slice(&timelocks.src_public_cancellation.to_be_bytes());
-        
-        // dst_withdrawal: u32 (4 bytes, offset 24)
-        bytes[24..28].copy_from_slice(&timelocks.dst_withdrawal.to_be_bytes());
-        
-        // dst_public_withdrawal: u32 (4 bytes, offset 28)
-        bytes[28..32].copy_from_slice(&timelocks.dst_public_withdrawal.to_be_bytes());
-        
-        // dst_cancellation: u32 (4 bytes, offset 32) - now included!
-        bytes[32..36].copy_from_slice(&timelocks.dst_cancellation.to_be_bytes());
-        
-        bytes
-    }
 
     /// Maps EVM address to Stellar address
     pub fn map_evm_to_stellar(env: &Env, evm_addr: BytesN<20>, stellar_addr: Address) {
