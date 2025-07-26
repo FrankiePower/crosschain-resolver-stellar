@@ -144,66 +144,15 @@
                         "map": [
                           {
                             "key": {
-                              "symbol": "deployed_at"
+                              "symbol": "packed_value"
                             },
                             "val": {
-                              "u64": 1000
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "dst_cancellation"
-                            },
-                            "val": {
-                              "u32": 350
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "dst_public_withdrawal"
-                            },
-                            "val": {
-                              "u32": 250
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "dst_withdrawal"
-                            },
-                            "val": {
-                              "u32": 150
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "src_cancellation"
-                            },
-                            "val": {
-                              "u32": 300
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "src_public_cancellation"
-                            },
-                            "val": {
-                              "u32": 400
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "src_public_withdrawal"
-                            },
-                            "val": {
-                              "u32": 200
-                            }
-                          },
-                          {
-                            "key": {
-                              "symbol": "src_withdrawal"
-                            },
-                            "val": {
-                              "u32": 100
+                              "u256": {
+                                "hi_hi": 4294967296100,
+                                "hi_lo": 858993459500,
+                                "lo_hi": 1717986918550,
+                                "lo_lo": 1073741824350
+                              }
                             }
                           }
                         ]
