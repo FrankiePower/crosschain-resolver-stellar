@@ -2,6 +2,7 @@
 
 mod timelock;
 mod types;
+mod immutables;
 
 use soroban_sdk::{contract, contractimpl, vec, Env, String, Vec};
 

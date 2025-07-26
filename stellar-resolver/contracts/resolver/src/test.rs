@@ -2,8 +2,10 @@
 
 use super::*;
 use crate::timelock::{timelocks, Stage, Timelocks};
+use crate::immutables::{immutables, DualAddress, Immutables};
 use crate::types::TimeLockError;
-use soroban_sdk::Env;
+use soroban_sdk::{Env, Address, BytesN};
+use soroban_sdk::testutils::Address as _;
 
 #[test]
 fn test_timelock_basic_functionality() {
@@ -204,4 +206,243 @@ fn test_all_stage_variants() {
     assert_eq!(timelocks::get(&timelocks, Stage::DstWithdrawal).unwrap(), 1150);
     assert_eq!(timelocks::get(&timelocks, Stage::DstPublicWithdrawal).unwrap(), 1250);
     assert_eq!(timelocks::get(&timelocks, Stage::DstCancellation).unwrap(), 1350);
+}
+
+// ===== IMMUTABLES TESTS =====
+
+fn create_test_dual_address(env: &Env) -> DualAddress {
+
+    let e = Env::default();
+    let evm_addr = BytesN::from_array(env, &[0x42; 20]);
+    let stellar_addr = Address::generate(&e);
+    DualAddress {
+        evm: evm_addr,
+        stellar: stellar_addr,
+    }
+}
+
+fn create_test_immutables(env: &Env) -> Immutables {
+    Immutables {
+        order_hash: BytesN::from_array(env, &[0x01; 32]),
+        hashlock: BytesN::from_array(env, &[0x02; 32]),
+        maker: create_test_dual_address(env),
+        taker: create_test_dual_address(env),
+        token: create_test_dual_address(env),
+        amount: 1000,
+        safety_deposit: 100,
+        timelocks: Timelocks {
+            deployed_at: 1000,
+            src_withdrawal: 100,
+            src_public_withdrawal: 200,
+            src_cancellation: 300,
+            src_public_cancellation: 400,
+            dst_withdrawal: 150,
+            dst_public_withdrawal: 250,
+            dst_cancellation: 350,
+        },
+    }
+}
+
+#[test]
+fn test_immutables_validation_valid() {
+    let env = Env::default();
+    let immutables = create_test_immutables(&env);
+    
+    assert!(immutables::validate_amounts(&immutables).is_ok());
+}
+
+#[test]
+fn test_immutables_validation_zero_amount() {
+    let env = Env::default();
+    let mut immutables = create_test_immutables(&env);
+    immutables.amount = 0;
+    
+    assert_eq!(
+        immutables::validate_amounts(&immutables),
+        Err(TimeLockError::DeploymentTimestampNotSet)
+    );
+}
+
+#[test]
+fn test_immutables_validation_negative_amount() {
+    let env = Env::default();
+    let mut immutables = create_test_immutables(&env);
+    immutables.amount = -100;
+    
+    assert_eq!(
+        immutables::validate_amounts(&immutables),
+        Err(TimeLockError::DeploymentTimestampNotSet)
+    );
+}
+
+#[test]
+fn test_immutables_validation_negative_safety_deposit() {
+    let env = Env::default();
+    let mut immutables = create_test_immutables(&env);
+    immutables.safety_deposit = -50;
+    
+    assert_eq!(
+        immutables::validate_amounts(&immutables),
+        Err(TimeLockError::DeploymentTimestampNotSet)
+    );
+}
+
+#[test]
+fn test_immutables_hash_generation() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let immutables = create_test_immutables(&env);
+        
+        // Test that hash generation succeeds
+        let hash_result = immutables::hash(&env, &immutables);
+        assert!(hash_result.is_ok());
+        
+        let hash = hash_result.unwrap();
+        // Hash should be 32 bytes
+        assert_eq!(hash.to_array().len(), 32);
+        
+        // Test that same immutables produce same hash
+        let hash2 = immutables::hash(&env, &immutables).unwrap();
+        assert_eq!(hash, hash2);
+    });
+}
+
+#[test]
+fn test_immutables_hash_different_for_different_data() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let immutables1 = create_test_immutables(&env);
+        let mut immutables2 = create_test_immutables(&env);
+        immutables2.amount = 2000; // Different amount
+        
+        let hash1 = immutables::hash(&env, &immutables1).unwrap();
+        let hash2 = immutables::hash(&env, &immutables2).unwrap();
+        
+        // Different immutables should produce different hashes
+        assert_ne!(hash1, hash2);
+    });
+}
+
+#[test]
+fn test_immutables_hash_validation_failure() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let mut immutables = create_test_immutables(&env);
+        immutables.amount = -100; // Invalid amount
+        
+        let hash_result = immutables::hash(&env, &immutables);
+        assert_eq!(hash_result, Err(TimeLockError::DeploymentTimestampNotSet));
+    });
+}
+
+#[test]
+fn test_evm_to_stellar_address_mapping() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let evm_addr = BytesN::from_array(&env, &[0xab; 20]);
+        let stellar_addr = Address::generate(&env);
+        
+        // Test mapping
+        immutables::map_evm_to_stellar(&env, evm_addr.clone(), stellar_addr.clone());
+        
+        // Test retrieval
+        let retrieved = immutables::get_stellar_addr(&env, &evm_addr);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap(), stellar_addr);
+    });
+}
+
+#[test]
+fn test_evm_to_stellar_address_not_found() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let evm_addr = BytesN::from_array(&env, &[0xcd; 20]);
+        
+        // Test retrieval of non-existent mapping
+        let retrieved = immutables::get_stellar_addr(&env, &evm_addr);
+        assert!(retrieved.is_none());
+    });
+}
+
+#[test]
+fn test_immutables_storage_and_retrieval() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let immutables = create_test_immutables(&env);
+        
+        // Test storage
+        let store_result = immutables::store_immutables(&env, &immutables);
+        assert!(store_result.is_ok());
+        
+        // Test retrieval
+        let retrieved = immutables::get_immutables(&env);
+        assert!(retrieved.is_some());
+        
+        let retrieved_immutables = retrieved.unwrap();
+        assert_eq!(retrieved_immutables.amount, immutables.amount);
+        assert_eq!(retrieved_immutables.safety_deposit, immutables.safety_deposit);
+        assert_eq!(retrieved_immutables.order_hash, immutables.order_hash);
+    });
+}
+
+#[test]
+fn test_immutables_storage_validation_failure() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        let mut immutables = create_test_immutables(&env);
+        immutables.amount = -100; // Invalid amount
+        
+        let store_result = immutables::store_immutables(&env, &immutables);
+        assert_eq!(store_result, Err(TimeLockError::DeploymentTimestampNotSet));
+    });
+}
+
+#[test]
+fn test_immutables_retrieval_when_empty() {
+    let env = Env::default();
+    let contract_id = env.register(Contract, ());
+    
+    env.as_contract(&contract_id, || {
+        // Test retrieval when nothing is stored
+        let retrieved = immutables::get_immutables(&env);
+        assert!(retrieved.is_none());
+    });
+}
+
+#[test]
+fn test_dual_address_structure() {
+    let env = Env::default();
+    let evm_addr = BytesN::from_array(&env, &[0xef; 20]);
+    let stellar_addr = Address::generate(&env);
+    
+    let dual_addr = DualAddress {
+        evm: evm_addr.clone(),
+        stellar: stellar_addr.clone(),
+    };
+    
+    assert_eq!(dual_addr.evm, evm_addr);
+    assert_eq!(dual_addr.stellar, stellar_addr);
+}
+
+#[test]
+fn test_immutables_with_zero_safety_deposit() {
+    let env = Env::default();
+    let mut immutables = create_test_immutables(&env);
+    immutables.safety_deposit = 0; // Zero safety deposit should be valid
+    
+    assert!(immutables::validate_amounts(&immutables).is_ok());
 }
