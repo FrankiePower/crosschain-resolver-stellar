@@ -1,141 +1,238 @@
+use soroban_sdk::{contracttype, Env, U256};
 use crate::types::TimeLockError;
 
-use soroban_sdk::{contracttype, Env};
-
-// Define the Stage Enum to represent different timelock periods
+/// Timelock stages - must match Solidity exactly
 #[contracttype]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Stage {
-    SrcWithdrawal = 0,  // Period when only taker can withdraw on source chain
-    SrcPublicWithdrawal = 1,  // Period when anyone with secret can withdraw on source chain
-    SrcCancellation = 2,      // Period when only taker can cancel on source chain
-    SrcPublicCancellation = 3,// Period when anyone can cancel on source chain
-    DstWithdrawal = 4,        // Period when only maker can withdraw on destination chain
-    DstPublicWithdrawal = 5,  // Period when anyone with secret can withdraw on destination chain
-    DstCancellation = 6,      // Period when only maker can cancel on destination chain
+    SrcWithdrawal = 0,
+    SrcPublicWithdrawal = 1,
+    SrcCancellation = 2,
+    SrcPublicCancellation = 3,
+    DstWithdrawal = 4,
+    DstPublicWithdrawal = 5,
+    DstCancellation = 6,
 }
 
-// Define the Timelocks struct to store deployment timestamp and period offsets
+/// Timelocks - packed into single U256 value to match Solidity exactly
+/// This MUST match the Solidity TimelocksLib.sol bit packing exactly
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Timelocks {
-    pub deployed_at: u64,              // Unix timestamp of contract deployment
-    pub src_withdrawal: u32,           // Offset (seconds) from deployed_at for source chain withdrawal
-    pub src_public_withdrawal: u32,    // Offset for source chain public withdrawal
-    pub src_cancellation: u32,         // Offset for source chain cancellation
-    pub src_public_cancellation: u32,  // Offset for source chain public cancellation
-    pub dst_withdrawal: u32,           // Offset for destination chain withdrawal
-    pub dst_public_withdrawal: u32,    // Offset for destination chain public withdrawal
-    pub dst_cancellation: u32,         // Offset for destination chain cancellation
+    /// Single U256 value containing all timelock data
+    /// Packed exactly like Solidity's uint256 timelocks
+    pub packed_value: U256,
 }
 
-// Define storage keys for persistent storage
-// Used to store and retrieve Timelocks struct in Soroban's ledger
-#[contracttype]
-pub enum DataKey {
-    Timelocks, // Key for storing the Timelocks struct
+impl Timelocks {
+    /// Constants matching Solidity TimelocksLib.sol
+    const DEPLOYED_AT_OFFSET: u32 = 224;
+    
+    /// Create new Timelocks with proper bit packing
+    pub fn new(
+        env: &Env,
+        deployed_at: u32,
+        src_withdrawal: u32,
+        src_public_withdrawal: u32,
+        src_cancellation: u32,
+        src_public_cancellation: u32,
+        dst_withdrawal: u32,
+        dst_public_withdrawal: u32,
+        dst_cancellation: u32,
+    ) -> Self {
+        let mut packed = U256::from_u32(env, 0);
+        
+        // Pack deployed_at (bits 224-255)
+        let deployed_at_shifted = U256::from_u32(env, deployed_at).shl(Self::DEPLOYED_AT_OFFSET);
+        packed = packed.add(&deployed_at_shifted);
+        
+        // Pack each timelock (32 bits each)
+        let src_withdrawal_shifted = U256::from_u32(env, src_withdrawal).shl(192);
+        packed = packed.add(&src_withdrawal_shifted);
+        
+        let src_public_withdrawal_shifted = U256::from_u32(env, src_public_withdrawal).shl(160);
+        packed = packed.add(&src_public_withdrawal_shifted);
+        
+        let src_cancellation_shifted = U256::from_u32(env, src_cancellation).shl(128);
+        packed = packed.add(&src_cancellation_shifted);
+        
+        let src_public_cancellation_shifted = U256::from_u32(env, src_public_cancellation).shl(96);
+        packed = packed.add(&src_public_cancellation_shifted);
+        
+        let dst_withdrawal_shifted = U256::from_u32(env, dst_withdrawal).shl(64);
+        packed = packed.add(&dst_withdrawal_shifted);
+        
+        let dst_public_withdrawal_shifted = U256::from_u32(env, dst_public_withdrawal).shl(32);
+        packed = packed.add(&dst_public_withdrawal_shifted);
+        
+        let dst_cancellation_shifted = U256::from_u32(env, dst_cancellation);
+        packed = packed.add(&dst_cancellation_shifted);
+        
+        Self { packed_value: packed }
+    }
+    
+    /// Set deployed_at timestamp
+    pub fn set_deployed_at(&mut self, env: &Env, value: u32) {
+        // Create mask to clear deployed_at bits (invert the deployed_at mask)
+        let deployed_at_mask = U256::from_u32(env, 0xffffffff).shl(Self::DEPLOYED_AT_OFFSET);
+        let clear_mask = deployed_at_mask; // In real implementation, this would be bitwise NOT
+        
+        // Clear the deployed_at bits and set new value
+        let new_deployed_at = U256::from_u32(env, value).shl(Self::DEPLOYED_AT_OFFSET);
+        
+        // For simplicity, we'll reconstruct the entire value
+        // In production, you'd use proper bitwise operations
+        let current_bytes = self.packed_value.to_be_bytes();
+        let mut bytes_array = [0u8; 32];
+        
+        // Copy bytes from Soroban Bytes to array
+        for i in 0..32 {
+            bytes_array[i] = current_bytes.get(i as u32).unwrap_or(0);
+        }
+        
+        // Update deployed_at in the first 4 bytes (big-endian)
+        bytes_array[0..4].copy_from_slice(&value.to_be_bytes());
+        
+        // Convert back to U256
+        let updated_bytes = soroban_sdk::Bytes::from_array(env, &bytes_array);
+        self.packed_value = U256::from_be_bytes(env, &updated_bytes);
+    }
+    
+    /// Get deployed_at timestamp (bits 224-255)
+    pub fn get_deployed_at(&self, env: &Env) -> u32 {
+        let bytes = self.packed_value.to_be_bytes();
+        let mut deployed_at_bytes = [0u8; 4];
+        
+        // Extract first 4 bytes (deployed_at is in bits 224-255)
+        for i in 0..4 {
+            deployed_at_bytes[i] = bytes.get(i as u32).unwrap_or(0);
+        }
+        
+        u32::from_be_bytes(deployed_at_bytes)
+    }
+    
+    /// Get raw timelock offset for a stage (not absolute timestamp)
+    pub fn get_stage_offset(&self, env: &Env, stage: Stage) -> u32 {
+        let bytes = self.packed_value.to_be_bytes();
+        let start_idx = match stage {
+            Stage::SrcWithdrawal => 4,
+            Stage::SrcPublicWithdrawal => 8,
+            Stage::SrcCancellation => 12,
+            Stage::SrcPublicCancellation => 16,
+            Stage::DstWithdrawal => 20,
+            Stage::DstPublicWithdrawal => 24,
+            Stage::DstCancellation => 28,
+        };
+        
+        let mut offset_bytes = [0u8; 4];
+        for i in 0..4 {
+            offset_bytes[i] = bytes.get((start_idx + i) as u32).unwrap_or(0);
+        }
+        
+        u32::from_be_bytes(offset_bytes)
+    }
+    
+    /// Get absolute timestamp for a stage (deployed_at + offset)
+    pub fn get_stage_timestamp(&self, env: &Env, stage: Stage) -> Result<u64, TimeLockError> {
+        let deployed_at = self.get_deployed_at(env) as u64;
+        let offset = self.get_stage_offset(env, stage) as u64;
+        
+        deployed_at
+            .checked_add(offset)
+            .ok_or(TimeLockError::TimelockValueOverflow)
+    }
+    
+    /// Convert to 32-byte array for EVM-compatible hashing
+    pub fn to_bytes(&self, env: &Env) -> [u8; 32] {
+        let bytes = self.packed_value.to_be_bytes();
+        let mut result = [0u8; 32];
+        
+        for i in 0..32 {
+            result[i] = bytes.get(i as u32).unwrap_or(0);
+        }
+        
+        result
+    }
+    
+    /// Create from 32-byte array (for cross-chain compatibility)
+    pub fn from_bytes(env: &Env, bytes: [u8; 32]) -> Self {
+        let soroban_bytes = soroban_sdk::Bytes::from_array(env, &bytes);
+        Self {
+            packed_value: U256::from_be_bytes(env, &soroban_bytes),
+        }
+    }
 }
 
-// Timelocks module containing functions to manage timelock data
+/// Timelocks module - functions for working with timelock data
 pub mod timelocks {
     use super::*;
-
-    /// Sets the deployment timestamp in the Timelocks struct
-    /// Equivalent to Solidity's setDeployedAt; stores updated struct in persistent storage
-    /// # Arguments
-    /// * `env` - Soroban environment for storage access
-    /// * `timelocks` - Mutable reference to the Timelocks struct to update
-    /// * `value` - New deployment timestamp (Unix timestamp)
+    
+    /// Storage key for timelock data
+    #[contracttype]
+    pub enum DataKey {
+        Timelocks,
+    }
+    
+    /// Set deployed_at timestamp and persist to storage
     pub fn set_deployed_at(env: &Env, timelocks: &mut Timelocks, value: u64) {
-        timelocks.deployed_at = value;
-        // Persist the updated Timelocks struct to storage
+        // Note: deployed_at is u32 in the packed format (matching Solidity)
+        timelocks.set_deployed_at(env, value as u32);
         env.storage().persistent().set(&DataKey::Timelocks, timelocks);
     }
-
-    /// Calculates the start of the rescue period
-    /// Equivalent to Solidity's rescueStart; adds rescue_delay to deployed_at
-    /// # Arguments
-    /// * `timelocks` - Reference to the Timelocks struct
-    /// * `rescue_delay` - Delay (seconds) after which funds can be rescued
-    /// # Returns
-    /// * `Result<u64, TimeLockError>` - The rescue period start time or an error if overflow occurs
-    pub fn rescue_start(timelocks: &Timelocks, rescue_delay: u64) -> Result<u64, TimeLockError> {
-        timelocks
-            .deployed_at
+    
+    /// Calculate rescue start time
+    pub fn rescue_start(timelocks: &Timelocks, env: &Env, rescue_delay: u64) -> Result<u64, TimeLockError> {
+        let deployed_at = timelocks.get_deployed_at(env) as u64;
+        deployed_at
             .checked_add(rescue_delay)
             .ok_or(TimeLockError::RescueStartOverflow)
     }
-
-    /// Retrieves the absolute timestamp for a given stage
-    /// Equivalent to Solidity's get; adds stage-specific offset to deployed_at
-    /// # Arguments
-    /// * `timelocks` - Reference to the Timelocks struct
-    /// * `stage` - The timelock stage (e.g., SrcWithdrawal)
-    /// # Returns
-    /// * `Result<u64, TimeLockError>` - The stage's start time or an error if overflow occurs
-    pub fn get(timelocks: &Timelocks, stage: Stage) -> Result<u64, TimeLockError> {
-        // Select the appropriate offset based on the stage
-        let offset = match stage {
-            Stage::SrcWithdrawal => timelocks.src_withdrawal,
-            Stage::SrcPublicWithdrawal => timelocks.src_public_withdrawal,
-            Stage::SrcCancellation => timelocks.src_cancellation,
-            Stage::SrcPublicCancellation => timelocks.src_public_cancellation,
-            Stage::DstWithdrawal => timelocks.dst_withdrawal,
-            Stage::DstPublicWithdrawal => timelocks.dst_public_withdrawal,
-            Stage::DstCancellation => timelocks.dst_cancellation,
-        };
-        // Add offset to deployed_at, checking for overflow
-        timelocks
-            .deployed_at
-            .checked_add(offset as u64)
-            .ok_or(TimeLockError::TimelockValueOverflow)
+    
+    /// Get absolute timestamp for a stage
+    pub fn get(timelocks: &Timelocks, env: &Env, stage: Stage) -> Result<u64, TimeLockError> {
+        timelocks.get_stage_timestamp(env, stage)
     }
-
-    /// Validates the timelocks to ensure correct ordering and non-zero periods
-    /// Ensures logical progression of periods (e.g., withdrawal before cancellation)
-    /// # Arguments
-    /// * `timelocks` - Reference to the Timelocks struct
-    /// # Returns
-    /// * `Result<(), TimeLockError>` - Ok if valid, or an error if ordering is invalid
-    pub fn validate_timelocks(timelocks: &Timelocks) -> Result<(), TimeLockError> {
+    
+    /// Validate timelock ordering and constraints
+    pub fn validate_timelocks(timelocks: &Timelocks, env: &Env) -> Result<(), TimeLockError> {
         // Ensure deployed_at is set
-        if timelocks.deployed_at == 0 {
+        if timelocks.get_deployed_at(env) == 0 {
             return Err(TimeLockError::DeploymentTimestampNotSet);
         }
-
-        // Ensure source chain timelocks are in logical order
-        if timelocks.src_withdrawal >= timelocks.src_public_withdrawal
-            || timelocks.src_public_withdrawal >= timelocks.src_cancellation
-            || timelocks.src_cancellation >= timelocks.src_public_cancellation
+        
+        // Validate source chain ordering
+        let src_withdrawal = timelocks.get_stage_offset(env, Stage::SrcWithdrawal);
+        let src_public_withdrawal = timelocks.get_stage_offset(env, Stage::SrcPublicWithdrawal);
+        let src_cancellation = timelocks.get_stage_offset(env, Stage::SrcCancellation);
+        let src_public_cancellation = timelocks.get_stage_offset(env, Stage::SrcPublicCancellation);
+        
+        if src_withdrawal >= src_public_withdrawal
+            || src_public_withdrawal >= src_cancellation
+            || src_cancellation >= src_public_cancellation
         {
             return Err(TimeLockError::InvalidSourceChainTimelockOrdering);
         }
-
-        // Ensure destination chain timelocks are in logical order
-        if timelocks.dst_withdrawal >= timelocks.dst_public_withdrawal
-            || timelocks.dst_public_withdrawal >= timelocks.dst_cancellation
+        
+        // Validate destination chain ordering
+        let dst_withdrawal = timelocks.get_stage_offset(env, Stage::DstWithdrawal);
+        let dst_public_withdrawal = timelocks.get_stage_offset(env, Stage::DstPublicWithdrawal);
+        let dst_cancellation = timelocks.get_stage_offset(env, Stage::DstCancellation);
+        
+        if dst_withdrawal >= dst_public_withdrawal
+            || dst_public_withdrawal >= dst_cancellation
         {
             return Err(TimeLockError::InvalidDestinationChainTimelockOrdering);
         }
-
-        // Note: Offset validation for u32::MAX is implicit since fields are u32 type
-
+        
         Ok(())
     }
-
-    /// Stores the Timelocks struct in persistent storage
-    /// # Arguments
-    /// * `env` - Soroban environment for storage access
-    /// * `timelocks` - Reference to the Timelocks struct to store
+    
+    /// Store timelocks in persistent storage
     pub fn store_timelocks(env: &Env, timelocks: &Timelocks) {
         env.storage().persistent().set(&DataKey::Timelocks, timelocks);
     }
-
-    /// Retrieves the Timelocks struct from persistent storage
-    /// # Arguments
-    /// * `env` - Soroban environment for storage access
-    /// # Returns
-    /// * `Option<Timelocks>` - The stored Timelocks struct, or None if not found
+    
+    /// Retrieve timelocks from persistent storage
     pub fn get_timelocks(env: &Env) -> Option<Timelocks> {
         env.storage().persistent().get(&DataKey::Timelocks)
     }
