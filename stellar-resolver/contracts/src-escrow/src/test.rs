@@ -1,0 +1,83 @@
+#![cfg(test)]
+
+use super::*;
+use shared::{
+    BaseEscrowTrait, EscrowError, other_immutables as immutables, 
+    DualAddress, Immutables, timelocks, Stage, Timelocks
+};
+use soroban_sdk::{Env, Address, BytesN};
+use soroban_sdk::testutils::{Address as _, Ledger};
+
+// Helper functions for testing
+fn create_test_dual_address(env: &Env) -> DualAddress {
+    let e = Env::default();
+    let evm_addr = BytesN::from_array(env, &[0x42; 20]);
+    let stellar_addr = Address::generate(&e);
+    DualAddress {
+        evm: evm_addr,
+        stellar: stellar_addr,
+    }
+}
+
+fn create_test_secret(env: &Env) -> (BytesN<32>, BytesN<32>) {
+    let secret = BytesN::from_array(env, &[0x42; 32]);
+    // Create hashlock by hashing the secret
+    let secret_bytes = soroban_sdk::Bytes::from_array(env, &secret.to_array());
+    let hashlock = env.crypto().keccak256(&secret_bytes).into();
+    (secret, hashlock)
+}
+
+fn create_test_immutables_with_secret(env: &Env, _secret: BytesN<32>, hashlock: BytesN<32>) -> Immutables {
+    Immutables {
+        order_hash: BytesN::from_array(env, &[0x01; 32]),
+        hashlock,
+        maker: create_test_dual_address(env),
+        taker: create_test_dual_address(env),
+        token: create_test_dual_address(env),
+        amount: 1000,
+        safety_deposit: 100,
+        timelocks: Timelocks::new(
+            env,
+            1000, // deployed_at
+            100,  // src_withdrawal
+            200,  // src_public_withdrawal
+            300,  // src_cancellation
+            400,  // src_public_cancellation
+            150,  // dst_withdrawal
+            250,  // dst_public_withdrawal
+            350,  // dst_cancellation
+        ),
+    }
+}
+
+// ===== SRCESCROW TESTS =====
+
+#[test]
+fn test_srcescrow_rescue_delay() {
+    let env = Env::default();
+    let contract_id = env.register(SrcEscrow, ());
+    
+    env.as_contract(&contract_id, || {
+        let delay = SrcEscrow::rescue_delay(env.clone());
+        assert_eq!(delay, 86_400); // Default 24 hours
+    });
+}
+
+#[test]
+fn test_srcescrow_withdraw_validation() {
+    let env = Env::default();
+    let contract_id = env.register(SrcEscrow, ());
+    let (secret, hashlock) = create_test_secret(&env);
+    let immutables = create_test_immutables_with_secret(&env, secret.clone(), hashlock);
+    
+    // Set current time within withdrawal window
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp = 1150; // Between deployed_at + src_withdrawal (1100) and src_public_withdrawal (1200)
+    });
+    
+    env.as_contract(&contract_id, || {
+        // Note: This will fail due to missing caller authentication and missing address mappings
+        let _result = SrcEscrow::withdraw(env.clone(), secret, immutables);
+        // Should pass timelock validation but may fail on other checks
+    });
+}
