@@ -1,7 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-  "contracts/resolver",
+  "contracts/dst-escrow",
+  "contracts/src-escrow", 
+  "contracts/shared",
+  "contracts/factory",
 ]
 
 [workspace.dependencies]
