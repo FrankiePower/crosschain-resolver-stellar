@@ -72,18 +72,18 @@ fn test_create_src_escrow() {
     let immutables = create_test_immutables(&env);
     
     // Create source escrow
-    let result = factory_client.create_src_escrow(immutables.clone());
+    let result = factory_client.create_src_escrow(&immutables.clone());
     assert!(result.is_ok());
     
     let factory_address = result.unwrap();
     assert_eq!(factory_address, factory_client.address);
     
     // Verify escrow was stored correctly
-    let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
-    let stage = factory_client.get_escrow_stage(escrow_id.clone());
+    let escrow_id = shared::other_immutables::hash(&env, &immutables.clone()).unwrap();
+    let stage = factory_client.get_escrow_stage(&escrow_id.clone());
     assert_eq!(stage, EscrowStage::Created);
     
-    let (escrow_type, stored_immutables) = factory_client.get_escrow_state(escrow_id.clone()).unwrap();
+    let (escrow_type, stored_immutables) = factory_client.get_escrow_state(&escrow_id.clone()).unwrap();
     assert_eq!(escrow_type, EscrowType::Source);
     assert_eq!(stored_immutables.amount, immutables.amount);
     assert_eq!(stored_immutables.safety_deposit, immutables.safety_deposit);
@@ -97,7 +97,7 @@ fn test_create_dst_escrow() {
     let immutables = create_test_immutables(&env);
     
     // Create destination escrow
-    let result = factory_client.create_dst_escrow(immutables.clone());
+    let result = factory_client.create_dst_escrow(&immutables.clone());
     assert!(result.is_ok());
     
     let factory_address = result.unwrap();
@@ -105,10 +105,10 @@ fn test_create_dst_escrow() {
     
     // Verify escrow was stored correctly
     let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
-    let stage = factory_client.get_escrow_stage(escrow_id.clone());
+    let stage = factory_client.get_escrow_stage(&escrow_id.clone());
     assert_eq!(stage, EscrowStage::Created);
     
-    let (escrow_type, stored_immutables) = factory_client.get_escrow_state(escrow_id.clone()).unwrap();
+    let (escrow_type, stored_immutables) = factory_client.get_escrow_state(escrow_id.clone());
     assert_eq!(escrow_type, EscrowType::Destination);
     assert_eq!(stored_immutables.amount, immutables.amount);
 }

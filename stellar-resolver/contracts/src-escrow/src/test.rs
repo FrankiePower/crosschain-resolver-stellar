@@ -58,7 +58,7 @@ fn test_srcescrow_rescue_delay() {
     let contract_id = env.register(SrcEscrow, ());
     
     env.as_contract(&contract_id, || {
-        let delay = SrcEscrow::rescue_delay(env.clone());
+        let delay = SrcEscrow::src_rescue_delay(env.clone());
         assert_eq!(delay, 86_400); // Default 24 hours
     });
 }
