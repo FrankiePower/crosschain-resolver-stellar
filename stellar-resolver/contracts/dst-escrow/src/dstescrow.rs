@@ -23,7 +23,7 @@ impl DstEscrow {
         immutables: Immutables,
     ) -> Result<(), Error> {
         only_valid_secret(&env, &secret, &immutables)?;
-        validate_immutables(&env, &immutables)?;
+        dst_validate_immutables(&env, &immutables)?;
 
         // Different timelock: DstPublicWithdrawal → DstCancellation window
         let public_start = timelocks::get(&immutables.timelocks, &env, Stage::DstPublicWithdrawal)
@@ -54,7 +54,7 @@ impl DstEscrow {
     pub fn withdraw(env: Env, secret: BytesN<32>, immutables: Immutables) -> Result<(), Error> {
         only_taker(&env, &immutables)?;
         only_valid_secret(&env, &secret, &immutables)?;
-        validate_immutables(&env, &immutables)?;
+        dst_validate_immutables(&env, &immutables)?;
 
         // Different timelock: DstWithdrawal → DstCancellation window
         let withdraw_start = timelocks::get(&immutables.timelocks, &env, Stage::DstWithdrawal)
@@ -70,7 +70,7 @@ impl DstEscrow {
 
     pub fn cancel(env: Env, immutables: Immutables) -> Result<(), Error> {
         only_taker(&env, &immutables)?;
-        validate_immutables(&env, &immutables)?;
+        dst_validate_immutables(&env, &immutables)?;
 
         // Can only cancel AFTER DstCancellation time (line 65 in Solidity)
         let cancel_time = timelocks::get(&immutables.timelocks, &env, Stage::DstCancellation)
@@ -97,22 +97,12 @@ impl DstEscrow {
         Ok(())
     }
 
-    pub fn rescue_funds(
-        env: Env,
-        token: DualAddress,
-        amount: i128,
-        immutables: Immutables,
-    ) -> Result<(), Error> {
-        <shared::baseescrow::BaseEscrow as BaseEscrowTrait>::rescue_funds(
-            env, token, amount, immutables,
-        )
-    }
 
-    pub fn rescue_delay(env: Env) -> u64 {
+    pub fn dst_rescue_delay(env: Env) -> u64 {
         Self::get_rescue_delay(env)
     }
 
-    pub fn factory(env: Env) -> Address {
+    pub fn dst_factory(env: Env) -> Address {
         Self::get_factory(env)
     }
 }
@@ -140,7 +130,7 @@ fn _dst_withdraw(env: &Env, secret: BytesN<32>, immutables: &Immutables) -> Resu
     Ok(())
 }
 
-fn validate_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+fn dst_validate_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
     if immutables.amount <= 0 || immutables.safety_deposit <= 0 {
         return Err(Error::InvalidImmutables);
     }
