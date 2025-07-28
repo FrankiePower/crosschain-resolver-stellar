@@ -71,12 +71,10 @@ pub fn only_before(env: &Env, stop: u64) -> Result<(), Error> {
     Ok(())
 }
 
-// BaseEscrow contract
-#[contract]
+// BaseEscrow shared implementation
 pub struct BaseEscrow;
 
 // Partial implementation
-#[contractimpl]
 impl BaseEscrowTrait for BaseEscrow {
     fn rescue_delay(env: Env) -> u64 {
         env.storage()

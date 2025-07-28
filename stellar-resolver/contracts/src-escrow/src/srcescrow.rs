@@ -4,8 +4,8 @@ symbol_short,
 };
 use shared::{
     BaseEscrowTrait, EscrowError as Error, only_taker, only_valid_secret, only_before, only_after, uni_transfer,
-    Immutables, DualAddress, other_immutables as immutables,
-    timelocks, Stage, Timelocks
+    Immutables, other_immutables as immutables,
+    timelocks, Stage
 };
 
 #[contract]
@@ -13,7 +13,7 @@ pub struct SrcEscrow;
 
 // Helper function for maker check
 fn only_maker(env: &Env, immutables: &Immutables) -> Result<(), Error> {
-    let stellar_maker = immutables::get_stellar_addr(env,
+    let _stellar_maker = immutables::get_stellar_addr(env,
 &immutables.maker.evm)
         .ok_or(Error::AddressMappingMissing)?;
     // TODO: Add proper caller authentication
@@ -49,7 +49,7 @@ impl SrcEscrow {
     pub fn withdraw(env: Env, secret: BytesN<32>, immutables: Immutables) -> Result<(), Error> {
         only_taker(&env, &immutables)?;
         only_valid_secret(&env, &secret, &immutables)?;
-        validate_immutables(&env, &immutables)?;
+        src_validate_immutables(&env, &immutables)?;
         let withdraw_deadline = timelocks::get(&immutables.timelocks, &env, Stage::SrcPublicWithdrawal).map_err(|_| Error::TimeLockError)?;
         only_before(&env, withdraw_deadline)?;
 
@@ -70,7 +70,7 @@ impl SrcEscrow {
 
     pub fn cancel(env: Env, immutables: Immutables) -> Result<(), Error> {
         only_maker(&env, &immutables)?;
-        validate_immutables(&env, &immutables)?;
+        src_validate_immutables(&env, &immutables)?;
         let cancel_time = timelocks::get(&immutables.timelocks, &env, Stage::SrcCancellation).map_err(|_| Error::TimeLockError)?;
         only_after(&env, cancel_time)?;
 
@@ -89,23 +89,18 @@ impl SrcEscrow {
         Ok(())
     }
 
-    pub fn rescue_funds(env: Env, token: DualAddress, amount: i128, immutables: Immutables) -> Result<(), Error> {
-        // Delegate to BaseEscrow implementation
-        <shared::baseescrow::BaseEscrow as BaseEscrowTrait>::rescue_funds(env, token, amount, immutables)
-    }
 
-    pub fn rescue_delay(env: Env) -> u64 {
+    pub fn src_rescue_delay(env: Env) -> u64 {
         Self::get_rescue_delay(env)
     }
 
-    pub fn factory(env: Env) -> Address {
+    pub fn src_factory(env: Env) -> Address {
         Self::get_factory(env)
     }
 }
 
 // Specific validate_immutables for SrcEscrow
-fn validate_immutables(env: &Env, immutables: &Immutables) -> Result<(),
- Error> {
+fn src_validate_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
     if immutables.amount <= 0 || immutables.safety_deposit <= 0 {
         return Err(Error::InvalidImmutables);
     }
