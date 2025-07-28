@@ -2,12 +2,12 @@
 extern crate alloc;
 extern crate std;
 
-use crate::{EscrowFactory, EscrowFactoryClient};
-use shared::{DualAddress, Immutables, Timelocks};
+use crate::{EscrowFactory, EscrowFactoryClient, EscrowStage, EscrowType};
+use shared::{DualAddress, Immutables, Timelocks, EscrowError};
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _},
-    Address, BytesN, Env, IntoVal, Val, Vec,
+    Address, BytesN, Env,
 };
 
 // Helper function to create test immutables
@@ -42,104 +42,211 @@ fn create_test_immutables(env: &Env) -> Immutables {
     }
 }
 
+fn create_factory_client(env: &Env) -> EscrowFactoryClient {
+    let admin = Address::generate(env);
+    let rescue_delay = 86_400u64;
+    
+    EscrowFactoryClient::new(
+        env, 
+        &env.register(EscrowFactory, (admin, rescue_delay))
+    )
+}
+
 #[test]
 fn test_factory_initialization() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let src_wasm = BytesN::from_array(&env, &[1; 32]);
-    let dst_wasm = BytesN::from_array(&env, &[2; 32]);
+    let factory_client = create_factory_client(&env);
     
-    // Test factory initialization
-    let factory_client = EscrowFactoryClient::new(
-        &env, 
-        &env.register(EscrowFactory, (admin.clone(), src_wasm.clone(), dst_wasm.clone()))
-    );
+    let admin = factory_client.get_admin();
+    let rescue_delay = factory_client.get_rescue_delay();
     
-    // The factory should be successfully initialized
-    assert_eq!(factory_client.address.to_string().len() > 0, true);
+    assert_eq!(rescue_delay, 86_400u64);
+    assert_eq!(admin.to_string().len() > 0, true);
 }
 
 #[test]
-fn test_generic_deploy_pattern() {
+fn test_create_src_escrow() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let src_wasm = BytesN::from_array(&env, &[1; 32]);
-    let dst_wasm = BytesN::from_array(&env, &[2; 32]);
-    
-    let factory_client = EscrowFactoryClient::new(
-        &env, 
-        &env.register(EscrowFactory, (admin.clone(), src_wasm.clone(), dst_wasm.clone()))
-    );
-    
-    let deployer = factory_client.address.clone();
-    let wasm_hash = BytesN::from_array(&env, &[3; 32]);
-    let salt = BytesN::from_array(&env, &[4; 32]);
-    let init_fn = symbol_short!("init");
-    let init_args: Vec<Val> = (5u32,).into_val(&env);
-    
-    env.mock_all_auths();
-    
-    // Test that the generic deploy method exists with correct signature
-    // Note: This would fail in actual deployment without valid WASM
-    // but demonstrates the correct function signature
-    
-    // We can't actually deploy without valid WASM, but we can verify the method exists
-    // by checking the client has the expected methods
-    assert_eq!(factory_client.address.to_string().len() > 0, true);
-}
-
-#[test]
-fn test_escrow_deployment_concept() {
-    let env = Env::default();
-    let admin = Address::generate(&env);
-    let src_wasm = BytesN::from_array(&env, &[1; 32]);
-    let dst_wasm = BytesN::from_array(&env, &[2; 32]);
-    
-    let factory_client = EscrowFactoryClient::new(
-        &env, 
-        &env.register(EscrowFactory, (admin.clone(), src_wasm, dst_wasm))
-    );
+    let factory_client = create_factory_client(&env);
     
     let immutables = create_test_immutables(&env);
-    let order_hash = BytesN::from_array(&env, &[0x03; 32]);
-    let rescue_delay = 86_400u64;
-    let deployer = factory_client.address.clone();
     
-    env.mock_all_auths();
+    // Create source escrow
+    let result = factory_client.create_src_escrow(immutables.clone());
+    assert!(result.is_ok());
     
-    // Test the concept of escrow deployment
-    // Note: Actual deployment would require valid compiled WASM files
-    // This demonstrates the factory pattern with correct parameters
+    let factory_address = result.unwrap();
+    assert_eq!(factory_address, factory_client.address);
     
-    // The deployment functions should have the correct signature:
-    // deploy_src_escrow(deployer, order_hash, rescue_delay, immutables) -> (Address, Val)
-    // deploy_dst_escrow(deployer, order_hash, rescue_delay, immutables) -> (Address, Val)
-    // deploy_escrow_pair(deployer, order_hash, rescue_delay, immutables) -> ((Address, Val), (Address, Val))
+    // Verify escrow was stored correctly
+    let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
+    let stage = factory_client.get_escrow_stage(escrow_id.clone());
+    assert_eq!(stage, EscrowStage::Created);
     
-    // Verify the factory is ready for real deployment
-    assert_eq!(factory_client.address.to_string().len() > 0, true);
+    let (escrow_type, stored_immutables) = factory_client.get_escrow_state(escrow_id.clone()).unwrap();
+    assert_eq!(escrow_type, EscrowType::Source);
+    assert_eq!(stored_immutables.amount, immutables.amount);
+    assert_eq!(stored_immutables.safety_deposit, immutables.safety_deposit);
 }
 
 #[test]
-fn test_wasm_hash_update() {
+fn test_create_dst_escrow() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let src_wasm = BytesN::from_array(&env, &[1; 32]);
-    let dst_wasm = BytesN::from_array(&env, &[2; 32]);
+    let factory_client = create_factory_client(&env);
     
-    let factory_client = EscrowFactoryClient::new(
-        &env, 
-        &env.register(EscrowFactory, (admin.clone(), src_wasm, dst_wasm))
-    );
+    let immutables = create_test_immutables(&env);
     
-    let new_src_wasm = Some(BytesN::from_array(&env, &[5; 32]));
-    let new_dst_wasm = Some(BytesN::from_array(&env, &[6; 32]));
+    // Create destination escrow
+    let result = factory_client.create_dst_escrow(immutables.clone());
+    assert!(result.is_ok());
     
+    let factory_address = result.unwrap();
+    assert_eq!(factory_address, factory_client.address);
+    
+    // Verify escrow was stored correctly
+    let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
+    let stage = factory_client.get_escrow_stage(escrow_id.clone());
+    assert_eq!(stage, EscrowStage::Created);
+    
+    let (escrow_type, stored_immutables) = factory_client.get_escrow_state(escrow_id.clone()).unwrap();
+    assert_eq!(escrow_type, EscrowType::Destination);
+    assert_eq!(stored_immutables.amount, immutables.amount);
+}
+
+#[test]
+fn test_create_duplicate_escrow_fails() {
+    let env = Env::default();
+    let factory_client = create_factory_client(&env);
+    
+    let immutables = create_test_immutables(&env);
+    
+    // Create first escrow - should succeed
+    let result1 = factory_client.create_src_escrow(immutables.clone());
+    assert!(result1.is_ok());
+    
+    // Try to create same escrow again - should fail
+    let result2 = factory_client.create_src_escrow(immutables.clone());
+    assert!(result2.is_err());
+    assert_eq!(result2.unwrap_err(), EscrowError::InvalidImmutables);
+}
+
+#[test]
+fn test_withdraw_escrow() {
+    let env = Env::default();
     env.mock_all_auths();
     
-    // Test that WASM hashes can be updated
-    factory_client.update_wasm_hashes(&new_src_wasm, &new_dst_wasm);
+    let factory_client = create_factory_client(&env);
+    let immutables = create_test_immutables(&env);
     
-    // In a real scenario, we would verify the storage was updated
-    assert_eq!(factory_client.address.to_string().len() > 0, true);
+    // Create escrow
+    let result = factory_client.create_src_escrow(immutables.clone());
+    assert!(result.is_ok());
+    
+    let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
+    let secret = immutables.hashlock; // Use hashlock as secret for testing
+    
+    // Withdraw should succeed
+    let withdraw_result = factory_client.withdraw(escrow_id.clone(), &secret);
+    assert!(withdraw_result.is_ok());
+    
+    // Verify stage updated
+    let stage = factory_client.get_escrow_stage(escrow_id.clone());
+    assert_eq!(stage, EscrowStage::Withdrawn);
+    
+    // Try to withdraw again - should fail
+    let withdraw_result2 = factory_client.withdraw(escrow_id.clone(), secret);
+    assert!(withdraw_result2.is_err());
+    assert_eq!(withdraw_result2.unwrap_err(), EscrowError::InvalidTime);
+}
+
+#[test]
+fn test_cancel_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let factory_client = create_factory_client(&env);
+    let immutables = create_test_immutables(&env);
+    
+    // Create escrow
+    let result = factory_client.create_src_escrow(immutables.clone());
+    assert!(result.is_ok());
+    
+    let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
+    
+    // Cancel should succeed (mocked auth)
+    let cancel_result = factory_client.cancel(escrow_id.clone());
+    assert!(cancel_result.is_ok());
+    
+    // Verify stage updated
+    let stage = factory_client.get_escrow_stage(escrow_id.clone());
+    assert_eq!(stage, EscrowStage::Cancelled);
+}
+
+#[test]
+fn test_rescue_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let factory_client = create_factory_client(&env);
+    let immutables = create_test_immutables(&env);
+    
+    // Create escrow
+    let result = factory_client.create_src_escrow(immutables.clone());
+    assert!(result.is_ok());
+    
+    let escrow_id = shared::other_immutables::hash(&env, immutables.clone()).unwrap();
+    
+    // Rescue funds should succeed (mocked auth and timing)
+    let rescue_result = factory_client.rescue_funds(escrow_id, 500i128);
+    assert!(rescue_result.is_ok());
+}
+
+#[test]
+fn test_multiple_escrows() {
+    let env = Env::default();
+    let factory_client = create_factory_client(&env);
+    
+    // Create multiple different escrows
+    let mut immutables1 = create_test_immutables(&env);
+    immutables1.amount = 1000;
+    
+    let mut immutables2 = create_test_immutables(&env);
+    immutables2.amount = 2000;
+    immutables2.order_hash = BytesN::from_array(&env, &[0x02; 32]); // Different hash
+    
+    // Create both escrows
+    let result1 = factory_client.create_src_escrow(immutables1.clone());
+    let result2 = factory_client.create_dst_escrow(immutables2.clone());
+    
+    assert!(result1.is_ok());
+    assert!(result2.is_ok());
+    
+    // Verify both are stored correctly
+    let escrow_id1 = shared::other_immutables::hash(&env, &immutables1).unwrap();
+    let escrow_id2 = shared::other_immutables::hash(&env, &immutables2).unwrap();
+    
+    let (type1, stored1) = factory_client.get_escrow_state(escrow_id1).unwrap();
+    let (type2, stored2) = factory_client.get_escrow_state(escrow_id2).unwrap();
+    
+    assert_eq!(type1, EscrowType::Source);
+    assert_eq!(type2, EscrowType::Destination);
+    assert_eq!(stored1.amount, 1000);
+    assert_eq!(stored2.amount, 2000);
+}
+
+#[test]
+fn test_nonexistent_escrow() {
+    let env = Env::default();
+    let factory_client = create_factory_client(&env);
+    
+    let fake_escrow_id = BytesN::from_array(&env, &[0xFF; 32]);
+    
+    // Try to get nonexistent escrow - should fail
+    let result = factory_client.get_escrow_state(&fake_escrow_id);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), EscrowError::InvalidImmutables);
+    
+    // Stage should default to Created
+    let stage = factory_client.get_escrow_stage(&fake_escrow_id);
+    assert_eq!(stage, EscrowStage::Created);
 }

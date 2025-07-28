@@ -1,163 +1,273 @@
 #![no_std]
 
-/// Cross-chain escrow factory for deploying src-escrow and dst-escrow contracts
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, Val, Vec, IntoVal};
-use shared::{DualAddress, Immutables};
+/// Cross-chain escrow factory that manages multiple escrow states internally
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, contracttype};
+use shared::{
+    Immutables, EscrowError as Error, only_taker, only_valid_secret, only_before, only_after, uni_transfer,
+    other_immutables as immutables, timelocks, Stage
+};
 
 #[contract]
 pub struct EscrowFactory;
 
+// Storage keys for factory configuration
 const ADMIN: Symbol = symbol_short!("admin");
-const SRC_WASM: Symbol = symbol_short!("src_wasm");
-const DST_WASM: Symbol = symbol_short!("dst_wasm");
+const RESCUE_DELAY: Symbol = symbol_short!("rsc_delay");
+
+// Storage key type for individual escrow states
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowDataKey {
+    // Escrow state keyed by immutables hash
+    EscrowState(BytesN<32>),
+    // Escrow stage tracking
+    EscrowStage(BytesN<32>),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowType {
+    Source,
+    Destination,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowStage {
+    Created,
+    Withdrawn,
+    Cancelled,
+    Rescued,
+}
 
 #[contractimpl]
 impl EscrowFactory {
-    /// Initialize factory with admin and escrow contract WASM hashes
-    pub fn __constructor(
-        env: Env, 
-        admin: Address,
-        src_escrow_wasm: BytesN<32>,
-        dst_escrow_wasm: BytesN<32>
-    ) {
+    /// Initialize factory with admin and default rescue delay
+    pub fn __constructor(env: Env, admin: Address, rescue_delay: u64) {
         env.storage().instance().set(&ADMIN, &admin);
-        env.storage().instance().set(&SRC_WASM, &src_escrow_wasm);
-        env.storage().instance().set(&DST_WASM, &dst_escrow_wasm);
+        env.storage().instance().set(&RESCUE_DELAY, &rescue_delay);
     }
 
-    /// Deploy source chain escrow contract with proper initialization
-    pub fn deploy_src_escrow(
+    /// Create source chain escrow - stores immutables and returns factory address
+    pub fn create_src_escrow(
         env: Env,
-        deployer: Address,
-        order_hash: BytesN<32>,
-        rescue_delay: u64,
         immutables: Immutables,
-    ) -> (Address, Val) {
-        // Skip authorization if deployer is the current contract
-        if deployer != env.current_contract_address() {
-            deployer.require_auth();
+    ) -> Result<Address, Error> {
+        // Validate immutables
+        Self::validate_src_immutables(&env, &immutables)?;
+        
+        let escrow_id = immutables::hash(&env, &immutables).map_err(|_| Error::InvalidImmutables)?;
+        
+        // Check if escrow already exists
+        if env.storage().persistent().has(&EscrowDataKey::EscrowState(escrow_id.clone())) {
+            return Err(Error::InvalidImmutables); // Already exists
         }
-
-        let src_wasm: BytesN<32> = env.storage().instance().get(&SRC_WASM).unwrap();
         
-        // Use order_hash as salt for deterministic address
-        let salt = order_hash;
-
-        // Deploy the contract using the uploaded Wasm with given hash
-        let deployed_address = env
-            .deployer()
-            .with_address(deployer, salt)
-            .deploy(src_wasm);
-
-        // Initialize the contract after deployment
-        let factory_addr = env.current_contract_address();
-        let init_args: Vec<Val> = (factory_addr, rescue_delay, immutables).into_val(&env);
+        // Store escrow data
+        env.storage().persistent().set(&EscrowDataKey::EscrowState(escrow_id.clone()), &(EscrowType::Source, immutables.clone()));
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Created);
         
-        let res: Val = env.invoke_contract(&deployed_address, &symbol_short!("init"), init_args);
-
-        (deployed_address, res)
+        // Map addresses for cross-chain resolution
+        immutables::map_evm_to_stellar(&env, immutables.maker.evm.clone(), immutables.maker.stellar.clone());
+        immutables::map_evm_to_stellar(&env, immutables.taker.evm.clone(), immutables.taker.stellar.clone());
+        immutables::map_evm_to_stellar(&env, immutables.token.evm.clone(), immutables.token.stellar.clone());
+        
+        // Store timelocks
+        timelocks::store_timelocks(&env, &immutables.timelocks);
+        
+        env.events().publish((symbol_short!("SrcCreate"), escrow_id), immutables.amount);
+        Ok(env.current_contract_address())
     }
 
-    /// Deploy destination chain escrow contract with proper initialization
-    pub fn deploy_dst_escrow(
+    /// Create destination chain escrow - stores immutables and returns factory address
+    pub fn create_dst_escrow(
         env: Env,
-        deployer: Address,
-        order_hash: BytesN<32>,
-        rescue_delay: u64,
         immutables: Immutables,
-    ) -> (Address, Val) {
-        // Skip authorization if deployer is the current contract
-        if deployer != env.current_contract_address() {
-            deployer.require_auth();
+    ) -> Result<Address, Error> {
+        // Validate immutables
+        Self::validate_dst_immutables(&env, &immutables)?;
+        
+        let escrow_id = immutables::hash(&env, &immutables).map_err(|_| Error::InvalidImmutables)?;
+        
+        // Check if escrow already exists
+        if env.storage().persistent().has(&EscrowDataKey::EscrowState(escrow_id.clone())) {
+            return Err(Error::InvalidImmutables); // Already exists
         }
-
-        let dst_wasm: BytesN<32> = env.storage().instance().get(&DST_WASM).unwrap();
         
-        // Use order_hash as salt for deterministic address
-        let salt = order_hash;
-
-        // Deploy the contract using the uploaded Wasm with given hash
-        let deployed_address = env
-            .deployer()
-            .with_address(deployer, salt)
-            .deploy(dst_wasm);
-
-        // Initialize the contract after deployment
-        let factory_addr = env.current_contract_address();
-        let init_args: Vec<Val> = (factory_addr, rescue_delay, immutables).into_val(&env);
+        // Store escrow data
+        env.storage().persistent().set(&EscrowDataKey::EscrowState(escrow_id.clone()), &(EscrowType::Destination, immutables.clone()));
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Created);
         
-        let res: Val = env.invoke_contract(&deployed_address, &symbol_short!("init"), init_args);
-
-        (deployed_address, res)
+        // Map addresses for cross-chain resolution
+        immutables::map_evm_to_stellar(&env, immutables.maker.evm.clone(), immutables.maker.stellar.clone());
+        immutables::map_evm_to_stellar(&env, immutables.taker.evm.clone(), immutables.taker.stellar.clone());
+        immutables::map_evm_to_stellar(&env, immutables.token.evm.clone(), immutables.token.stellar.clone());
+        
+        // Store timelocks
+        timelocks::store_timelocks(&env, &immutables.timelocks);
+        
+        env.events().publish((symbol_short!("DstCreate"), escrow_id), immutables.amount);
+        Ok(env.current_contract_address())
     }
 
-    /// Deploy both escrow contracts atomically for a cross-chain swap
-    pub fn deploy_escrow_pair(
-        env: Env,
-        deployer: Address,
-        order_hash: BytesN<32>,
-        rescue_delay: u64,
-        immutables: Immutables,
-    ) -> ((Address, Val), (Address, Val)) {
-        let src_result = Self::deploy_src_escrow(
-            env.clone(), 
-            deployer.clone(), 
-            order_hash.clone(), 
-            rescue_delay, 
-            immutables.clone()
-        );
-        let dst_result = Self::deploy_dst_escrow(
-            env.clone(), 
-            deployer, 
-            order_hash, 
-            rescue_delay, 
-            immutables
-        );
+    /// Withdraw from escrow using secret
+    pub fn withdraw(env: Env, escrow_id: BytesN<32>, secret: BytesN<32>) -> Result<(), Error> {
+        let (escrow_type, immutables) = Self::get_escrow_state(env.clone(), escrow_id.clone())?;
         
-        (src_result, dst_result)
+        // Check current stage
+        let stage: EscrowStage = env.storage().persistent().get(&EscrowDataKey::EscrowStage(escrow_id.clone())).unwrap_or(EscrowStage::Created);
+        if stage != EscrowStage::Created {
+            return Err(Error::InvalidTime);
+        }
+        
+        // Validate secret and timing based on escrow type
+        only_taker(&env, &immutables)?;
+        only_valid_secret(&env, &secret, &immutables)?;
+        
+        match escrow_type {
+            EscrowType::Source => {
+                let withdraw_deadline = timelocks::get(&immutables.timelocks, &env, Stage::SrcPublicWithdrawal).map_err(|_| Error::TimeLockError)?;
+                only_before(&env, withdraw_deadline)?;
+            },
+            EscrowType::Destination => {
+                let withdraw_deadline = timelocks::get(&immutables.timelocks, &env, Stage::DstPublicWithdrawal).map_err(|_| Error::TimeLockError)?;
+                only_before(&env, withdraw_deadline)?;
+            }
+        }
+        
+        // Get addresses
+        let stellar_token = immutables::get_stellar_addr(&env, &immutables.token.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        let stellar_taker = immutables::get_stellar_addr(&env, &immutables.taker.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        
+        // Transfer funds to taker
+        uni_transfer(&env, &stellar_token, &stellar_taker, immutables.amount)?;
+        uni_transfer(&env, &stellar_token, &stellar_taker, immutables.safety_deposit)?;
+        
+        // Update stage
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Withdrawn);
+        
+        env.events().publish((symbol_short!("Withdraw"), secret), immutables.amount);
+        Ok(())
     }
 
-    /// Generic deploy method following Soroban pattern
-    pub fn deploy(
-        env: Env,
-        deployer: Address,
-        wasm_hash: BytesN<32>,
-        salt: BytesN<32>,
-        init_fn: Symbol,
-        init_args: Vec<Val>,
-    ) -> (Address, Val) {
-        // Skip authorization if deployer is the current contract
-        if deployer != env.current_contract_address() {
-            deployer.require_auth();
-        }
-
-        // Deploy the contract using the uploaded Wasm with given hash
-        let deployed_address = env
-            .deployer()
-            .with_address(deployer, salt)
-            .deploy(wasm_hash);
-
-        // Invoke the init function with the given arguments
-        let res: Val = env.invoke_contract(&deployed_address, &init_fn, init_args);
+    /// Cancel escrow (maker only, after timelock)
+    pub fn cancel(env: Env, escrow_id: BytesN<32>) -> Result<(), Error> {
+        let (escrow_type, immutables) = Self::get_escrow_state(env.clone(), escrow_id.clone())?;
         
-        (deployed_address, res)
+        // Check current stage
+        let stage: EscrowStage = env.storage().persistent().get(&EscrowDataKey::EscrowStage(escrow_id.clone())).unwrap_or(EscrowStage::Created);
+        if stage != EscrowStage::Created {
+            return Err(Error::InvalidTime);
+        }
+        
+        // Validate maker and timing based on escrow type
+        Self::only_maker(&env, &immutables)?;
+        
+        match escrow_type {
+            EscrowType::Source => {
+                let cancel_time = timelocks::get(&immutables.timelocks, &env, Stage::SrcCancellation).map_err(|_| Error::TimeLockError)?;
+                only_after(&env, cancel_time)?;
+            },
+            EscrowType::Destination => {
+                let cancel_time = timelocks::get(&immutables.timelocks, &env, Stage::DstCancellation).map_err(|_| Error::TimeLockError)?;
+                only_after(&env, cancel_time)?;
+            }
+        }
+        
+        // Get addresses
+        let stellar_token = immutables::get_stellar_addr(&env, &immutables.token.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        let stellar_maker = immutables::get_stellar_addr(&env, &immutables.maker.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        
+        // Return funds to maker
+        uni_transfer(&env, &stellar_token, &stellar_maker, immutables.amount)?;
+        uni_transfer(&env, &stellar_token, &stellar_maker, immutables.safety_deposit)?;
+        
+        // Update stage
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Cancelled);
+        
+        env.events().publish((symbol_short!("Cancelled"),), immutables.amount);
+        Ok(())
     }
 
-    /// Update WASM hashes (admin only)
-    pub fn update_wasm_hashes(
-        env: Env,
-        src_escrow_wasm: Option<BytesN<32>>,
-        dst_escrow_wasm: Option<BytesN<32>>
-    ) {
-        let admin: Address = env.storage().instance().get(&ADMIN).unwrap();
-        admin.require_auth();
+    /// Rescue funds (taker only, after rescue delay)
+    pub fn rescue_funds(env: Env, escrow_id: BytesN<32>, amount: i128) -> Result<(), Error> {
+        let (_, immutables) = Self::get_escrow_state(env.clone(), escrow_id.clone())?;
+        
+        only_taker(&env, &immutables)?;
+        
+        let rescue_delay: u64 = env.storage().instance().get(&RESCUE_DELAY).unwrap_or(86_400);
+        let rescue_start = timelocks::rescue_start(&immutables.timelocks, &env, rescue_delay).map_err(|_| Error::TimeLockError)?;
+        only_after(&env, rescue_start)?;
+        
+        let stellar_token = immutables::get_stellar_addr(&env, &immutables.token.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        let stellar_taker = immutables::get_stellar_addr(&env, &immutables.taker.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        
+        uni_transfer(&env, &stellar_token, &stellar_taker, amount)?;
+        env.events().publish((symbol_short!("FundsSave"), stellar_token), amount);
+        Ok(())
+    }
 
-        if let Some(src_wasm) = src_escrow_wasm {
-            env.storage().instance().set(&SRC_WASM, &src_wasm);
+    /// Get escrow state by ID
+    pub fn get_escrow_state(env: Env, escrow_id: BytesN<32>) -> Result<(EscrowType, Immutables), Error> {
+        env.storage().persistent().get(&EscrowDataKey::EscrowState(escrow_id))
+            .ok_or(Error::InvalidImmutables)
+    }
+
+    /// Get escrow stage by ID
+    pub fn get_escrow_stage(env: Env, escrow_id: BytesN<32>) -> EscrowStage {
+        env.storage().persistent().get(&EscrowDataKey::EscrowStage(escrow_id))
+            .unwrap_or(EscrowStage::Created)
+    }
+
+    /// Admin functions
+    pub fn get_admin(env: Env) -> Address {
+        env.storage().instance().get(&ADMIN).unwrap()
+    }
+
+    pub fn get_rescue_delay(env: Env) -> u64 {
+        env.storage().instance().get(&RESCUE_DELAY).unwrap_or(86_400)
+    }
+
+    /// Helper functions
+    fn only_maker(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+        let _stellar_maker = immutables::get_stellar_addr(env, &immutables.maker.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        // TODO: Add proper caller authentication
+        Ok(())
+    }
+
+    fn validate_src_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+        if immutables.amount <= 0 || immutables.safety_deposit <= 0 {
+            return Err(Error::InvalidImmutables);
         }
-        if let Some(dst_wasm) = dst_escrow_wasm {
-            env.storage().instance().set(&DST_WASM, &dst_wasm);
+        timelocks::validate_timelocks(&immutables.timelocks, env).map_err(|_| Error::TimeLockError)?;
+        // Verify Stellar addresses exist
+        if immutables::get_stellar_addr(env, &immutables.maker.evm).is_none() ||
+           immutables::get_stellar_addr(env, &immutables.taker.evm).is_none() ||
+           immutables::get_stellar_addr(env, &immutables.token.evm).is_none() {
+            return Err(Error::AddressMappingMissing);
         }
+        Ok(())
+    }
+
+    fn validate_dst_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+        if immutables.amount <= 0 || immutables.safety_deposit <= 0 {
+            return Err(Error::InvalidImmutables);
+        }
+        timelocks::validate_timelocks(&immutables.timelocks, env).map_err(|_| Error::TimeLockError)?;
+        // Verify Stellar addresses exist
+        if immutables::get_stellar_addr(env, &immutables.maker.evm).is_none() ||
+           immutables::get_stellar_addr(env, &immutables.taker.evm).is_none() ||
+           immutables::get_stellar_addr(env, &immutables.token.evm).is_none() {
+            return Err(Error::AddressMappingMissing);
+        }
+        Ok(())
     }
 }
 
