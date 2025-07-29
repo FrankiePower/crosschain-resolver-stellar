@@ -1,0 +1,63 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+out/
+target/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Temporary folders
+tmp/
+temp/
+
+# Cross-chain resolver example (1inch fork)
+# Ignore the entire directory first
+cross-chain-resolver-example/
+
+# Then explicitly track only our modifications
+!cross-chain-resolver-example/tests/
+!cross-chain-resolver-example/tests/config.ts
+!cross-chain-resolver-example/tests/main.spec.ts
+!cross-chain-resolver-example/package.json
