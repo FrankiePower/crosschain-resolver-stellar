@@ -18,9 +18,9 @@ const RESCUE_DELAY: Symbol = symbol_short!("rsc_delay");
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EscrowDataKey {
-    // Escrow state keyed by immutables hash
+    // Escrow state keyed by order_hash (cross-chain consistency)
     EscrowState(BytesN<32>),
-    // Escrow stage tracking
+    // Escrow stage tracking keyed by order_hash
     EscrowStage(BytesN<32>),
 }
 
@@ -56,16 +56,17 @@ impl EscrowFactory {
         // Validate immutables
         Self::validate_src_immutables(&env, &immutables)?;
         
-        let escrow_id = immutables::hash(&env, &immutables).map_err(|_| Error::InvalidImmutables)?;
+        // Use order_hash as the unique escrow identifier (cross-chain consistency)
+        let order_hash = immutables.order_hash.clone();
         
-        // Check if escrow already exists
-        if env.storage().persistent().has(&EscrowDataKey::EscrowState(escrow_id.clone())) {
+        // Check if escrow already exists (prevent duplicate order_hash)
+        if env.storage().persistent().has(&EscrowDataKey::EscrowState(order_hash.clone())) {
             return Err(Error::InvalidImmutables); // Already exists
         }
         
-        // Store escrow data
-        env.storage().persistent().set(&EscrowDataKey::EscrowState(escrow_id.clone()), &(EscrowType::Source, immutables.clone()));
-        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Created);
+        // Store escrow data keyed by order_hash
+        env.storage().persistent().set(&EscrowDataKey::EscrowState(order_hash.clone()), &(EscrowType::Source, immutables.clone()));
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(order_hash.clone()), &EscrowStage::Created);
         
         // Map addresses for cross-chain resolution
         immutables::map_evm_to_stellar(&env, immutables.maker.evm.clone(), immutables.maker.stellar.clone());
@@ -75,7 +76,7 @@ impl EscrowFactory {
         // Store timelocks
         timelocks::store_timelocks(&env, &immutables.timelocks);
         
-        env.events().publish((symbol_short!("SrcCreate"), escrow_id), immutables.amount);
+        env.events().publish((symbol_short!("SrcCreate"), order_hash), immutables.amount);
         Ok(env.current_contract_address())
     }
 
@@ -87,16 +88,17 @@ impl EscrowFactory {
         // Validate immutables
         Self::validate_dst_immutables(&env, &immutables)?;
         
-        let escrow_id = immutables::hash(&env, &immutables).map_err(|_| Error::InvalidImmutables)?;
+        // Use order_hash as the unique escrow identifier (cross-chain consistency)
+        let order_hash = immutables.order_hash.clone();
         
-        // Check if escrow already exists
-        if env.storage().persistent().has(&EscrowDataKey::EscrowState(escrow_id.clone())) {
+        // Check if escrow already exists (prevent duplicate order_hash)
+        if env.storage().persistent().has(&EscrowDataKey::EscrowState(order_hash.clone())) {
             return Err(Error::InvalidImmutables); // Already exists
         }
         
-        // Store escrow data
-        env.storage().persistent().set(&EscrowDataKey::EscrowState(escrow_id.clone()), &(EscrowType::Destination, immutables.clone()));
-        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Created);
+        // Store escrow data keyed by order_hash
+        env.storage().persistent().set(&EscrowDataKey::EscrowState(order_hash.clone()), &(EscrowType::Destination, immutables.clone()));
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(order_hash.clone()), &EscrowStage::Created);
         
         // Map addresses for cross-chain resolution
         immutables::map_evm_to_stellar(&env, immutables.maker.evm.clone(), immutables.maker.stellar.clone());
@@ -106,16 +108,16 @@ impl EscrowFactory {
         // Store timelocks
         timelocks::store_timelocks(&env, &immutables.timelocks);
         
-        env.events().publish((symbol_short!("DstCreate"), escrow_id), immutables.amount);
+        env.events().publish((symbol_short!("DstCreate"), order_hash), immutables.amount);
         Ok(env.current_contract_address())
     }
 
-    /// Withdraw from escrow using secret
-    pub fn withdraw(env: Env, escrow_id: BytesN<32>, secret: BytesN<32>) -> Result<(), Error> {
-        let (escrow_type, immutables) = Self::get_escrow_state(env.clone(), escrow_id.clone())?;
+    /// Withdraw from escrow using secret (order_hash is the key)
+    pub fn withdraw(env: Env, order_hash: BytesN<32>, secret: BytesN<32>) -> Result<(), Error> {
+        let (escrow_type, immutables) = Self::get_escrow_state(env.clone(), order_hash.clone())?;
         
         // Check current stage
-        let stage: EscrowStage = env.storage().persistent().get(&EscrowDataKey::EscrowStage(escrow_id.clone())).unwrap_or(EscrowStage::Created);
+        let stage: EscrowStage = env.storage().persistent().get(&EscrowDataKey::EscrowStage(order_hash.clone())).unwrap_or(EscrowStage::Created);
         if stage != EscrowStage::Created {
             return Err(Error::InvalidTime);
         }
@@ -146,18 +148,18 @@ impl EscrowFactory {
         uni_transfer(&env, &stellar_token, &stellar_taker, immutables.safety_deposit)?;
         
         // Update stage
-        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Withdrawn);
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(order_hash.clone()), &EscrowStage::Withdrawn);
         
         env.events().publish((symbol_short!("Withdraw"), secret), immutables.amount);
         Ok(())
     }
 
-    /// Cancel escrow (maker only, after timelock)
-    pub fn cancel(env: Env, escrow_id: BytesN<32>) -> Result<(), Error> {
-        let (escrow_type, immutables) = Self::get_escrow_state(env.clone(), escrow_id.clone())?;
+    /// Cancel escrow (maker only, after timelock) - order_hash is the key
+    pub fn cancel(env: Env, order_hash: BytesN<32>) -> Result<(), Error> {
+        let (escrow_type, immutables) = Self::get_escrow_state(env.clone(), order_hash.clone())?;
         
         // Check current stage
-        let stage: EscrowStage = env.storage().persistent().get(&EscrowDataKey::EscrowStage(escrow_id.clone())).unwrap_or(EscrowStage::Created);
+        let stage: EscrowStage = env.storage().persistent().get(&EscrowDataKey::EscrowStage(order_hash.clone())).unwrap_or(EscrowStage::Created);
         if stage != EscrowStage::Created {
             return Err(Error::InvalidTime);
         }
@@ -187,15 +189,15 @@ impl EscrowFactory {
         uni_transfer(&env, &stellar_token, &stellar_maker, immutables.safety_deposit)?;
         
         // Update stage
-        env.storage().persistent().set(&EscrowDataKey::EscrowStage(escrow_id.clone()), &EscrowStage::Cancelled);
+        env.storage().persistent().set(&EscrowDataKey::EscrowStage(order_hash.clone()), &EscrowStage::Cancelled);
         
         env.events().publish((symbol_short!("Cancelled"),), immutables.amount);
         Ok(())
     }
 
-    /// Rescue funds (taker only, after rescue delay)
-    pub fn rescue_funds(env: Env, escrow_id: BytesN<32>, amount: i128) -> Result<(), Error> {
-        let (_, immutables) = Self::get_escrow_state(env.clone(), escrow_id.clone())?;
+    /// Rescue funds (taker only, after rescue delay) - order_hash is the key
+    pub fn rescue_funds(env: Env, order_hash: BytesN<32>, amount: i128) -> Result<(), Error> {
+        let (_, immutables) = Self::get_escrow_state(env.clone(), order_hash.clone())?;
         
         only_taker(&env, &immutables)?;
         
@@ -213,15 +215,15 @@ impl EscrowFactory {
         Ok(())
     }
 
-    /// Get escrow state by ID
-    pub fn get_escrow_state(env: Env, escrow_id: BytesN<32>) -> Result<(EscrowType, Immutables), Error> {
-        env.storage().persistent().get(&EscrowDataKey::EscrowState(escrow_id))
+    /// Get escrow state by order_hash
+    pub fn get_escrow_state(env: Env, order_hash: BytesN<32>) -> Result<(EscrowType, Immutables), Error> {
+        env.storage().persistent().get(&EscrowDataKey::EscrowState(order_hash))
             .ok_or(Error::InvalidImmutables)
     }
 
-    /// Get escrow stage by ID
-    pub fn get_escrow_stage(env: Env, escrow_id: BytesN<32>) -> EscrowStage {
-        env.storage().persistent().get(&EscrowDataKey::EscrowStage(escrow_id))
+    /// Get escrow stage by order_hash
+    pub fn get_escrow_stage(env: Env, order_hash: BytesN<32>) -> EscrowStage {
+        env.storage().persistent().get(&EscrowDataKey::EscrowStage(order_hash))
             .unwrap_or(EscrowStage::Created)
     }
 
