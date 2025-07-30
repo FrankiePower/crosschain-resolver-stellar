@@ -1,8 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{Env, Address, BytesN};
+use soroban_sdk::{Env, Address, BytesN, log};
 use soroban_sdk::testutils::{Address as _, Ledger};
+
+extern crate std;
 
 // ===== TIMELOCK TESTS =====
 
@@ -21,6 +23,20 @@ fn test_timelock_basic_functionality() {
         250,  // dst_public_withdrawal
         350,  // dst_cancellation
     );
+
+    // 🔍 LOG THE PACKED VALUE FOR DEBUGGING JavaScript conversion
+    log!(&env, "🔍 Timelocks created with individual values:");
+    log!(&env, "  deployed_at: {}", timelocks.get_deployed_at(&env));
+    log!(&env, "  src_withdrawal: {}", timelocks.get_stage_offset(&env, Stage::SrcWithdrawal));
+    log!(&env, "  src_public_withdrawal: {}", timelocks.get_stage_offset(&env, Stage::SrcPublicWithdrawal));
+    log!(&env, "  src_cancellation: {}", timelocks.get_stage_offset(&env, Stage::SrcCancellation));
+    log!(&env, "  src_public_cancellation: {}", timelocks.get_stage_offset(&env, Stage::SrcPublicCancellation));
+    log!(&env, "  dst_withdrawal: {}", timelocks.get_stage_offset(&env, Stage::DstWithdrawal));
+    log!(&env, "  dst_public_withdrawal: {}", timelocks.get_stage_offset(&env, Stage::DstPublicWithdrawal));
+    log!(&env, "  dst_cancellation: {}", timelocks.get_stage_offset(&env, Stage::DstCancellation));
+    
+    let packed_bytes = timelocks.to_bytes(&env);
+    log!(&env, "🔍 Packed bytes length: {}", packed_bytes.len() as u32);
 
     // Test set_deployed_at
     timelocks.set_deployed_at(&env, 2000);
@@ -180,14 +196,16 @@ fn test_timelock_storage_functions() {
         350,
     );
 
-    // Test store and retrieve
-    timelocks::store_timelocks(&env, &timelocks);
-    let retrieved = timelocks::get_timelocks(&env);
-    
-    assert!(retrieved.is_some());
-    let retrieved_timelocks = retrieved.unwrap();
-    assert_eq!(retrieved_timelocks.get_deployed_at(&env), 1000);
-    assert_eq!(retrieved_timelocks.get_stage_offset(&env, Stage::SrcWithdrawal), 100);
+    // Test store and retrieve - wrap with as_contract
+    env.as_contract(&env.current_contract_address(), || {
+        timelocks::store_timelocks(&env, &timelocks);
+        let retrieved = timelocks::get_timelocks(&env);
+        
+        assert!(retrieved.is_some());
+        let retrieved_timelocks = retrieved.unwrap();
+        assert_eq!(retrieved_timelocks.get_deployed_at(&env), 1000);
+        assert_eq!(retrieved_timelocks.get_stage_offset(&env, Stage::SrcWithdrawal), 100);
+    });
 }
 
 #[test]
@@ -343,13 +361,15 @@ fn test_evm_to_stellar_address_mapping() {
     let evm_addr = BytesN::from_array(&env, &[0xab; 20]);
     let stellar_addr = Address::generate(&env);
     
-    // Test mapping
-    other_immutables::map_evm_to_stellar(&env, evm_addr.clone(), stellar_addr.clone());
-    
-    // Test retrieval
-    let retrieved = other_immutables::get_stellar_addr(&env, &evm_addr);
-    assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap(), stellar_addr);
+    // Test mapping - wrap with as_contract
+    env.as_contract(&env.current_contract_address(), || {
+        other_immutables::map_evm_to_stellar(&env, evm_addr.clone(), stellar_addr.clone());
+        
+        // Test retrieval
+        let retrieved = other_immutables::get_stellar_addr(&env, &evm_addr);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap(), stellar_addr);
+    });
 }
 
 #[test]
@@ -358,9 +378,11 @@ fn test_evm_to_stellar_address_not_found() {
     
     let evm_addr = BytesN::from_array(&env, &[0xcd; 20]);
     
-    // Test retrieval of non-existent mapping
-    let retrieved = other_immutables::get_stellar_addr(&env, &evm_addr);
-    assert!(retrieved.is_none());
+    // Test retrieval of non-existent mapping - wrap with as_contract
+    env.as_contract(&env.current_contract_address(), || {
+        let retrieved = other_immutables::get_stellar_addr(&env, &evm_addr);
+        assert!(retrieved.is_none());
+    });
 }
 
 #[test]
@@ -369,18 +391,20 @@ fn test_immutables_storage_and_retrieval() {
     
     let immutables = create_test_immutables(&env);
     
-    // Test storage
-    let store_result = other_immutables::store_immutables(&env, &immutables);
-    assert!(store_result.is_ok());
-    
-    // Test retrieval
-    let retrieved = other_immutables::get_immutables(&env);
-    assert!(retrieved.is_some());
-    
-    let retrieved_immutables = retrieved.unwrap();
-    assert_eq!(retrieved_immutables.amount, immutables.amount);
-    assert_eq!(retrieved_immutables.safety_deposit, immutables.safety_deposit);
-    assert_eq!(retrieved_immutables.order_hash, immutables.order_hash);
+    // Test storage - wrap with as_contract
+    env.as_contract(&env.current_contract_address(), || {
+        let store_result = other_immutables::store_immutables(&env, &immutables);
+        assert!(store_result.is_ok());
+        
+        // Test retrieval
+        let retrieved = other_immutables::get_immutables(&env);
+        assert!(retrieved.is_some());
+        
+        let retrieved_immutables = retrieved.unwrap();
+        assert_eq!(retrieved_immutables.amount, immutables.amount);
+        assert_eq!(retrieved_immutables.safety_deposit, immutables.safety_deposit);
+        assert_eq!(retrieved_immutables.order_hash, immutables.order_hash);
+    });
 }
 
 #[test]
@@ -398,9 +422,11 @@ fn test_immutables_storage_validation_failure() {
 fn test_immutables_retrieval_when_empty() {
     let env = Env::default();
     
-    // Test retrieval when nothing is stored
-    let retrieved = other_immutables::get_immutables(&env);
-    assert!(retrieved.is_none());
+    // Test retrieval when nothing is stored - wrap with as_contract
+    env.as_contract(&env.current_contract_address(), || {
+        let retrieved = other_immutables::get_immutables(&env);
+        assert!(retrieved.is_none());
+    });
 }
 
 #[test]

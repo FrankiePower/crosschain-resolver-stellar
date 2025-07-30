@@ -85,8 +85,8 @@ impl EscrowFactory {
         env: Env,
         immutables: Immutables,
     ) -> Result<Address, Error> {
-        // Validate immutables
-        Self::validate_dst_immutables(&env, &immutables)?;
+        // Basic validation (amounts and timelocks)
+        Self::validate_basic_immutables(&env, &immutables)?;
         
         // Use order_hash as the unique escrow identifier (cross-chain consistency)
         let order_hash = immutables.order_hash.clone();
@@ -104,6 +104,9 @@ impl EscrowFactory {
         immutables::map_evm_to_stellar(&env, immutables.maker.evm.clone(), immutables.maker.stellar.clone());
         immutables::map_evm_to_stellar(&env, immutables.taker.evm.clone(), immutables.taker.stellar.clone());
         immutables::map_evm_to_stellar(&env, immutables.token.evm.clone(), immutables.token.stellar.clone());
+        
+        // Now validate that address mappings were created successfully
+        Self::validate_address_mappings(&env, &immutables)?;
         
         // Store timelocks
         timelocks::store_timelocks(&env, &immutables.timelocks);
@@ -258,17 +261,27 @@ impl EscrowFactory {
         Ok(())
     }
 
-    fn validate_dst_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+    fn validate_basic_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
         if immutables.amount <= 0 || immutables.safety_deposit <= 0 {
             return Err(Error::InvalidImmutables);
         }
         timelocks::validate_timelocks(&immutables.timelocks, env).map_err(|_| Error::TimeLockError)?;
-        // Verify Stellar addresses exist
+        Ok(())
+    }
+
+    fn validate_address_mappings(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+        // Verify Stellar addresses exist (should be available after mapping creation)
         if immutables::get_stellar_addr(env, &immutables.maker.evm).is_none() ||
            immutables::get_stellar_addr(env, &immutables.taker.evm).is_none() ||
            immutables::get_stellar_addr(env, &immutables.token.evm).is_none() {
             return Err(Error::AddressMappingMissing);
         }
+        Ok(())
+    }
+
+    fn validate_dst_immutables(env: &Env, immutables: &Immutables) -> Result<(), Error> {
+        Self::validate_basic_immutables(env, immutables)?;
+        Self::validate_address_mappings(env, immutables)?;
         Ok(())
     }
 }
