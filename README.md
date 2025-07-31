@@ -179,3 +179,35 @@ Cross-Chain Atomic Swap Technical Architecture Flow
   This architecture achieves true atomic swaps across
   EVM and Stellar networks using the factory as a
   stateful coordinator on the Stellar side.
+
+Perfect! The bindings are now working correctly. I've
+  successfully:
+
+  1. Generated TypeScript bindings for the Stellar contract using
+   stellar contract bindings typescript
+  2. Built the bindings package with npm install && npm run build
+  3. Integrated the bindings into the test project by:
+    - Adding the bindings as a local dependency in package.json
+    - Importing the Client class (not Contract) and proper types
+    - Using the correct constructor parameters for the Client
+    - Converting data to the proper format using u256 and i128
+  types
+    - Calling contract methods using the generated API:
+  stellarContract.create_dst_escrow({immutables: 
+  stellarImmutables})
+
+  The test is now successfully calling the Stellar contract
+  method create_dst_escrow without type errors. The bindings
+  provide a clean, typed interface to interact with your deployed
+   Stellar contract, automatically handling the conversion
+  between JavaScript/TypeScript types and Stellar's native types.
+
+  The key learnings from this integration:
+  - Use Client class, not Contract
+  - Import proper types like u256, i128 from
+  @stellar/stellar-sdk/contract
+  - Pass data in the correct format expected by the contract spec
+  - Use the generated method signatures for type safety
+
+  Your Stellar contract bindings are now ready for use in the
+  cross-chain resolver example!
