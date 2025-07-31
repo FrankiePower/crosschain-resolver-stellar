@@ -53,8 +53,8 @@ impl EscrowFactory {
         env: Env,
         immutables: Immutables,
     ) -> Result<Address, Error> {
-        // Validate immutables
-        Self::validate_src_immutables(&env, &immutables)?;
+        // Basic validation (amounts and timelocks) - like create_dst_escrow
+        Self::validate_basic_immutables(&env, &immutables)?;
         
         // Use order_hash as the unique escrow identifier (cross-chain consistency)
         let order_hash = immutables.order_hash.clone();
@@ -68,10 +68,13 @@ impl EscrowFactory {
         env.storage().persistent().set(&EscrowDataKey::EscrowState(order_hash.clone()), &(EscrowType::Source, immutables.clone()));
         env.storage().persistent().set(&EscrowDataKey::EscrowStage(order_hash.clone()), &EscrowStage::Created);
         
-        // Map addresses for cross-chain resolution
+        // Map addresses for cross-chain resolution (CREATE FIRST, like create_dst_escrow)
         immutables::map_evm_to_stellar(&env, immutables.maker.evm.clone(), immutables.maker.stellar.clone());
         immutables::map_evm_to_stellar(&env, immutables.taker.evm.clone(), immutables.taker.stellar.clone());
         immutables::map_evm_to_stellar(&env, immutables.token.evm.clone(), immutables.token.stellar.clone());
+        
+        // Now validate that address mappings were created successfully (like create_dst_escrow)
+        Self::validate_address_mappings(&env, &immutables)?;
         
         // Store timelocks
         timelocks::store_timelocks(&env, &immutables.timelocks);
