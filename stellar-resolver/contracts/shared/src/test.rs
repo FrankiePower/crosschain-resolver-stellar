@@ -36,7 +36,7 @@ fn test_timelock_basic_functionality() {
     log!(&env, "  dst_cancellation: {}", timelocks.get_stage_offset(&env, Stage::DstCancellation));
     
     let packed_bytes = timelocks.to_bytes(&env);
-    log!(&env, "🔍 Packed bytes length: {}", packed_bytes.len() as u32);
+    log!(&env, "🔍 Packed bytes length: {}", packed_bytes.len());
 
     // Test set_deployed_at
     timelocks.set_deployed_at(&env, 2000);
