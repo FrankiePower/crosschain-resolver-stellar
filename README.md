@@ -1,81 +1,121 @@
-# crosschain-resolver-stellar
+# 1inch Fusion+ Cross-Chain Resolver for Stellar
 
-Cross-Chain Atomic Swap Technical Architecture Flow
+## Overview
 
-  Based on the factory contract implementation, here's
-  how the cross-chain swap will work:
+This project implements **1inch Fusion+ for cross-chain atomic swaps** between EVM and Stellar networks. It adapts 1inch's intent-based atomic swap mechanism to handle the architectural differences between EVM smart contracts and Stellar's contract environment.
 
-  Phase 1: Setup & Deployment
+## Architecture
 
-  EVM Chain (Source)                 Stellar Chain
-  (Destination)
-       |                                      |
-  1. Maker creates order_hash        1. Factory receives
-   cross-chain
-     (unique identifier)                deployment
-  request
-       |                                      |
-  2. Deploy EVM escrow with:         2.
-  Factory.create_dst_escrow()
-     - order_hash                       - Same
-  order_hash (key!)
-     - hashlock (secret hash)           - Maps
-  EVM→Stellar addresses
-     - maker/taker EVM addresses        - Stores in
-  persistent storage
-     - token amount + safety deposit    - Returns
-  factory address
-       |                                      |
-  3. EVM escrow locks funds          3. Stellar factory
-  ready to receive
+### Core Concept: Dual Address System
 
-  Phase 2: Cross-Chain State Synchronization
+Since EVM and Stellar use different address formats, users provide **separate receiving addresses** for each chain:
 
-  Key Insight: order_hash is the canonical cross-chain 
-  identifier
+- **EVM Address**: `0x70997970c51812dc3a010c7d01b50e0d17dc79c8` (20 bytes)
+- **Stellar Address**: `GAGDEHLKL52PLPPW5DSGUP5TAKS2KUFJ7SY2QIBAMWD5YJZI7QR5Y33V` (32 bytes)
 
-  EVM Escrow Contract               Stellar Factory 
-  Contract
-       |                                   |
-  State: { order_hash: 0xABC... }   Storage:
-  EscrowDataKey::EscrowState(0xABC...)
-         funds locked                      →
-  (EscrowType::Destination, immutables)
+**Key Point**: Users specify where they want to receive funds on each chain, and balance verification checks their designated receiving addresses.
 
-                  Both contracts share the SAME
-  order_hash
-                  This ensures cross-chain consistency
+## Cross-Chain Atomic Swap Flow
 
-  Phase 3: Atomic Swap Execution
+### Phase 1: Order Creation & Address Specification
 
-  Happy Path - Successful Swap:
+**User Intent**: Swap EVM tokens for Stellar tokens
 
-  1. Taker discovers secret on EVM chain:
-     EVM: taker calls withdraw(secret) → reveals secret
+```javascript
+User provides:
+├─ EVM Address: 0x742d35Cc... (where they want to send from)
+├─ Stellar Address: GCAXA5L4T7G2E7R... (where they want to receive)
+├─ Amount: 100 USDC → 99 XLM
+└─ Secret: random_32_bytes (for atomic commitment)
+```
 
-  2. Cross-chain secret propagation:
-     → secret is now public on EVM blockchain
-     → Anyone can read it from transaction data
+### Phase 2: Escrow Deployment
 
-  3. Taker claims on Stellar:
-     Factory.withdraw(order_hash, secret)
-     ├─ Validates: only_taker() + timing + secret
-     ├─ Gets escrow: get_escrow_state(order_hash) 
-     ├─ Transfers: token + safety_deposit to taker
-     └─ Updates: EscrowStage → Withdrawn
+**EVM Chain (Source)**
+```solidity
+1. Deploy EVM escrow contract:
+   - order_hash (unique identifier)
+   - hashlock = keccak256(secret)
+   - maker EVM address (user's sending address)
+   - taker EVM address (resolver's address)
+   - 100 USDC locked in escrow
+```
 
-  Failure Path - Cancellation:
+**Stellar Chain (Destination)**  
+```rust
+2. Factory.create_dst_escrow():
+   - Same order_hash (key link!)
+   - Same hashlock
+   - DualAddress mapping:
+     * evm: user's EVM address
+     * stellar: user's STELLAR receiving address
+   - Amount: 99 XLM equivalent
+```
 
-  After timelock expires:
+### Phase 3: Resolver Funding
 
-  EVM Chain:                        Stellar Chain:
-  Maker calls cancel()
-  Factory.cancel(order_hash)
-  ├─ Validates maker + timing       ├─ Validates maker +
-   timing  
-  ├─ Returns funds to maker         ├─ Returns funds to 
-  maker
-  └─ State: Cancelled              └─ State: Cancelled
+**Critical Step**: Resolver funds the Stellar escrow with actual XLM
+
+```rust
+3. Factory.fund_escrow():
+   - order_hash: links to created escrow
+   - from: resolver's Stellar address
+   - amount: 99 XLM (in stroops)
+   
+   // XLM moves from resolver → factory contract
+```
+
+### Phase 4: Atomic Execution
+
+**Secret Revelation & Claims**
+
+```javascript
+4a. User withdraws from EVM escrow:
+    - Calls withdraw(secret) on EVM
+    - Reveals secret publicly on blockchain
+    - Receives resolver's tokens on EVM
+
+4b. User claims from Stellar escrow:  
+    - Calls Factory.withdraw(order_hash, revealed_secret)
+    - Factory validates secret matches hashlock
+    - XLM transferred to user's Stellar receiving address
+```
+
+### Phase 5: Balance Verification
+
+**Key Testing Point**: Check user's designated receiving addresses
+
+```javascript
+Balance checks:
+├─ EVM: Check user's EVM address balance (should decrease)
+├─ Stellar: Check user's STELLAR receiving address (should increase)
+└─ NOT resolver addresses - they're just facilitators
+```
+
+## Address Flow Example
+
+```
+Alice wants to swap EVM USDC → Stellar XLM
+
+Alice specifies:
+├─ EVM address: 0xAlice123... (her EVM wallet)  
+└─ Stellar address: GCAlice456... (her Stellar wallet)
+
+Resolver facilitates:
+├─ EVM: Resolver address 0xResolver789...
+└─ Stellar: Resolver address GAResolver012...
+
+Fund flows:
+1. Alice's EVM → EVM Escrow (100 USDC)
+2. Resolver's Stellar → Stellar Factory (99 XLM) 
+3. EVM Escrow → Resolver's EVM (100 USDC, after secret reveal)
+4. Stellar Factory → Alice's Stellar (99 XLM, after secret reveal)
+
+Final result:
+✅ Alice: Lost 100 USDC on EVM, Gained 99 XLM on Stellar
+✅ Resolver: Gained 100 USDC on EVM, Lost 99 XLM on Stellar
+✅ Atomic swap completed across chains
+```
 
   Phase 4: State Management Architecture
 

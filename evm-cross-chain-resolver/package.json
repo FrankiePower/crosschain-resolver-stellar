@@ -47,6 +47,7 @@
     "bindings": "../stellar-resolver/contracts/factory/bindings",
     "dotenv": "16.4.5",
     "ethers": "6.13.2",
+    "factory": "link:stellar-bindings/factory",
     "prool": "0.0.24"
   }
 }

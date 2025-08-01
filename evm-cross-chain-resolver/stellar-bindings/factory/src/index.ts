@@ -31,7 +31,12 @@ if (typeof window !== 'undefined') {
 }
 
 
-
+export const networks = {
+  testnet: {
+    networkPassphrase: "Test SDF Network ; September 2015",
+    contractId: "CBB3ONF3Q5LXIAATDL7PXBCEWIBJTD75SWVP2EYHHC2FD6UNNJ5ENCJD",
+  }
+} as const
 
 export type EscrowDataKey = {tag: "EscrowState", values: readonly [Buffer]} | {tag: "EscrowStage", values: readonly [Buffer]};
 
@@ -70,16 +75,6 @@ packed_value: u256;
  */
 export type TimelockDataKey = {tag: "Timelocks", values: void};
 
-/**
- * Storage key for immutables data
- */
-export type ImmutablesDataKey = {tag: "AddressMap", values: void} | {tag: "ImmutablesData", values: void};
-
-/**
- * Storage key for base escrow data
- */
-export type BaseEscrowDataKey = {tag: "RescueDelay", values: void} | {tag: "Factory", values: void} | {tag: "Immutables", values: void};
-
 export const TimeLockError = {
   1: {message:"RescueStartOverflow"},
   2: {message:"TimelockValueOverflow"},
@@ -106,6 +101,10 @@ export interface Immutables {
   timelocks: Timelocks;
   token: DualAddress;
 }
+
+export type AddressMapDataKey = {tag: "AddressMap", values: void} | {tag: "ImmutablesData", values: void};
+
+export type DataKey = {tag: "RescueDelay", values: void} | {tag: "Factory", values: void} | {tag: "Immutables", values: void};
 
 export const Errors = {
   1: {message:"InvalidCaller"},
@@ -141,7 +140,7 @@ export interface Client {
 
   /**
    * Construct and simulate a create_dst_escrow transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Create destination chain escrow - stores immutables and returns factory address
+   * Create destination chain escrow - stores immutables and accepts XLM funding
    */
   create_dst_escrow: ({immutables}: {immutables: Immutables}, options?: {
     /**
@@ -159,6 +158,27 @@ export interface Client {
      */
     simulate?: boolean;
   }) => Promise<AssembledTransaction<Result<string>>>
+
+  /**
+   * Construct and simulate a fund_escrow transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * Fund escrow with tokens (resolver deposits funds for user withdrawal)
+   */
+  fund_escrow: ({order_hash, from, amount}: {order_hash: Buffer, from: string, amount: i128}, options?: {
+    /**
+     * The fee to pay for the transaction. Default: BASE_FEE
+     */
+    fee?: number;
+
+    /**
+     * The maximum amount of time to wait for the transaction to complete. Default: DEFAULT_TIMEOUT
+     */
+    timeoutInSeconds?: number;
+
+    /**
+     * Whether to automatically simulate the transaction when constructing the AssembledTransaction. Default: true
+     */
+    simulate?: boolean;
+  }) => Promise<AssembledTransaction<Result<void>>>
 
   /**
    * Construct and simulate a withdraw transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
@@ -331,7 +351,8 @@ export class Client extends ContractClient {
         "AAAAAgAAAAAAAAAAAAAAC0VzY3Jvd1N0YWdlAAAAAAQAAAAAAAAAAAAAAAdDcmVhdGVkAAAAAAAAAAAAAAAACVdpdGhkcmF3bgAAAAAAAAAAAAAAAAAACUNhbmNlbGxlZAAAAAAAAAAAAAAAAAAAB1Jlc2N1ZWQA",
         "AAAAAAAAADZJbml0aWFsaXplIGZhY3Rvcnkgd2l0aCBhZG1pbiBhbmQgZGVmYXVsdCByZXNjdWUgZGVsYXkAAAAAAA1fX2NvbnN0cnVjdG9yAAAAAAAAAgAAAAAAAAAFYWRtaW4AAAAAAAATAAAAAAAAAAxyZXNjdWVfZGVsYXkAAAAGAAAAAA==",
         "AAAAAAAAAEpDcmVhdGUgc291cmNlIGNoYWluIGVzY3JvdyAtIHN0b3JlcyBpbW11dGFibGVzIGFuZCByZXR1cm5zIGZhY3RvcnkgYWRkcmVzcwAAAAAAEWNyZWF0ZV9zcmNfZXNjcm93AAAAAAAAAQAAAAAAAAAKaW1tdXRhYmxlcwAAAAAH0AAAAApJbW11dGFibGVzAAAAAAABAAAD6QAAABMAAAAD",
-        "AAAAAAAAAE9DcmVhdGUgZGVzdGluYXRpb24gY2hhaW4gZXNjcm93IC0gc3RvcmVzIGltbXV0YWJsZXMgYW5kIHJldHVybnMgZmFjdG9yeSBhZGRyZXNzAAAAABFjcmVhdGVfZHN0X2VzY3JvdwAAAAAAAAEAAAAAAAAACmltbXV0YWJsZXMAAAAAB9AAAAAKSW1tdXRhYmxlcwAAAAAAAQAAA+kAAAATAAAAAw==",
+        "AAAAAAAAAEtDcmVhdGUgZGVzdGluYXRpb24gY2hhaW4gZXNjcm93IC0gc3RvcmVzIGltbXV0YWJsZXMgYW5kIGFjY2VwdHMgWExNIGZ1bmRpbmcAAAAAEWNyZWF0ZV9kc3RfZXNjcm93AAAAAAAAAQAAAAAAAAAKaW1tdXRhYmxlcwAAAAAH0AAAAApJbW11dGFibGVzAAAAAAABAAAD6QAAABMAAAAD",
+        "AAAAAAAAAEVGdW5kIGVzY3JvdyB3aXRoIHRva2VucyAocmVzb2x2ZXIgZGVwb3NpdHMgZnVuZHMgZm9yIHVzZXIgd2l0aGRyYXdhbCkAAAAAAAALZnVuZF9lc2Nyb3cAAAAAAwAAAAAAAAAKb3JkZXJfaGFzaAAAAAAD7gAAACAAAAAAAAAABGZyb20AAAATAAAAAAAAAAZhbW91bnQAAAAAAAsAAAABAAAD6QAAA+0AAAAAAAAAAw==",
         "AAAAAAAAADlXaXRoZHJhdyBmcm9tIGVzY3JvdyB1c2luZyBzZWNyZXQgKG9yZGVyX2hhc2ggaXMgdGhlIGtleSkAAAAAAAAId2l0aGRyYXcAAAACAAAAAAAAAApvcmRlcl9oYXNoAAAAAAPuAAAAIAAAAAAAAAAGc2VjcmV0AAAAAAPuAAAAIAAAAAEAAAPpAAAD7QAAAAAAAAAD",
         "AAAAAAAAAEJDYW5jZWwgZXNjcm93IChtYWtlciBvbmx5LCBhZnRlciB0aW1lbG9jaykgLSBvcmRlcl9oYXNoIGlzIHRoZSBrZXkAAAAAAAZjYW5jZWwAAAAAAAEAAAAAAAAACm9yZGVyX2hhc2gAAAAAA+4AAAAgAAAAAQAAA+kAAAPtAAAAAAAAAAM=",
         "AAAAAAAAAEVSZXNjdWUgZnVuZHMgKHRha2VyIG9ubHksIGFmdGVyIHJlc2N1ZSBkZWxheSkgLSBvcmRlcl9oYXNoIGlzIHRoZSBrZXkAAAAAAAAMcmVzY3VlX2Z1bmRzAAAAAgAAAAAAAAAKb3JkZXJfaGFzaAAAAAAD7gAAACAAAAAAAAAABmFtb3VudAAAAAAACwAAAAEAAAPpAAAD7QAAAAAAAAAD",
@@ -354,6 +375,7 @@ export class Client extends ContractClient {
   public readonly fromJSON = {
     create_src_escrow: this.txFromJSON<Result<string>>,
         create_dst_escrow: this.txFromJSON<Result<string>>,
+        fund_escrow: this.txFromJSON<Result<void>>,
         withdraw: this.txFromJSON<Result<void>>,
         cancel: this.txFromJSON<Result<void>>,
         rescue_funds: this.txFromJSON<Result<void>>,
