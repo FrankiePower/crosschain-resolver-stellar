@@ -1,7 +1,7 @@
 #![no_std]
 
 /// Cross-chain escrow factory that manages multiple escrow states internally
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, contracttype};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, contracttype, token};
 use shared::{
     Immutables, EscrowError as Error, only_taker, only_valid_secret, only_before, only_after, uni_transfer,
     other_immutables as immutables, timelocks, Stage
@@ -83,7 +83,7 @@ impl EscrowFactory {
         Ok(env.current_contract_address())
     }
 
-    /// Create destination chain escrow - stores immutables and returns factory address
+    /// Create destination chain escrow - stores immutables and accepts XLM funding
     pub fn create_dst_escrow(
         env: Env,
         immutables: Immutables,
@@ -111,11 +111,38 @@ impl EscrowFactory {
         // Now validate that address mappings were created successfully
         Self::validate_address_mappings(&env, &immutables)?;
         
+        // Note: Contract funding is handled separately via fund_escrow() function
+        
         // Store timelocks
         timelocks::store_timelocks(&env, &immutables.timelocks);
         
         env.events().publish((symbol_short!("DstCreate"), order_hash), immutables.amount);
         Ok(env.current_contract_address())
+    }
+
+    /// Fund escrow with tokens (resolver deposits funds for user withdrawal)
+    pub fn fund_escrow(
+        env: Env,
+        order_hash: BytesN<32>,
+        from: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        // Require authorization from the account that's sending the funds
+        from.require_auth();
+        
+        // Get escrow data to validate it exists
+        let (_, immutables) = Self::get_escrow_state(env.clone(), order_hash.clone())?;
+        
+        // Get the token address
+        let stellar_token = immutables::get_stellar_addr(&env, &immutables.token.evm)
+            .ok_or(Error::AddressMappingMissing)?;
+        
+        // Transfer funds from caller to this contract via token client
+        let token_client = token::Client::new(&env, &stellar_token);
+        token_client.transfer(&from, &env.current_contract_address(), &amount);
+        
+        env.events().publish((symbol_short!("Fund"), order_hash), amount);
+        Ok(())
     }
 
     /// Withdraw from escrow using secret (order_hash is the key)
