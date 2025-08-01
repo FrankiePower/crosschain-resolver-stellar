@@ -51,13 +51,3 @@ coverage/
 # Temporary folders
 tmp/
 temp/
-
-# Cross-chain resolver example (1inch fork)
-# Ignore the entire directory first
-cross-chain-resolver-example/
-
-# Then explicitly track only our modifications
-!cross-chain-resolver-example/tests/
-!cross-chain-resolver-example/tests/config.ts
-!cross-chain-resolver-example/tests/main.spec.ts
-!cross-chain-resolver-example/package.json
