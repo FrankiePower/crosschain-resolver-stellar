@@ -34,7 +34,7 @@ if (typeof window !== 'undefined') {
 export const networks = {
   testnet: {
     networkPassphrase: "Test SDF Network ; September 2015",
-    contractId: "CBB3ONF3Q5LXIAATDL7PXBCEWIBJTD75SWVP2EYHHC2FD6UNNJ5ENCJD",
+    contractId: "CDOQ3UNUOZVPGUF3VIO4XMOTN5LVMBOAECRMIV3C7PEBDMB4D6GQRUNM",
   }
 } as const
 
@@ -102,9 +102,9 @@ export interface Immutables {
   token: DualAddress;
 }
 
-export type AddressMapDataKey = {tag: "AddressMap", values: void} | {tag: "ImmutablesData", values: void};
+export type ImmutablesDataKey = {tag: "AddressMap", values: void} | {tag: "ImmutablesData", values: void};
 
-export type DataKey = {tag: "RescueDelay", values: void} | {tag: "Factory", values: void} | {tag: "Immutables", values: void};
+export type BaseEscrowDataKey = {tag: "RescueDelay", values: void} | {tag: "Factory", values: void} | {tag: "Immutables", values: void};
 
 export const Errors = {
   1: {message:"InvalidCaller"},

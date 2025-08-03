@@ -40,6 +40,7 @@ interface BaseChainConfig {
         [symbol: string]: {
             address: string
             donor?: string
+            stellarContractId?: string // For Stellar SAC contracts
         }
     }
 }
@@ -121,14 +122,16 @@ export const config = {
             networkPassphrase: fromEnv.STELLAR_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
             horizonUrl: fromEnv.STELLAR_HORIZON_URL || 'https://horizon-testnet.stellar.org',
             sorobanRpcUrl: fromEnv.STELLAR_SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org',
-            // 🎯 LATEST FACTORY CONTRACT v3 - With authorization fix for fund_escrow
-            escrowFactory: fromEnv.STELLAR_ESCROW_FACTORY || 'CBB3ONF3Q5LXIAATDL7PXBCEWIBJTD75SWVP2EYHHC2FD6UNNJ5ENCJD',
+            // 🎯 LATEST FACTORY CONTRACT v5 - Mints to factory (escrow), not resolver
+            escrowFactory: fromEnv.STELLAR_ESCROW_FACTORY || 'CDOQ3UNUOZVPGUF3VIO4XMOTN5LVMBOAECRMIV3C7PEBDMB4D6GQRUNM',
             // 🔑 Test Stellar private key for resolver operations
             ownerPrivateKey: fromEnv.STELLAR_PRIVATE_KEY || 'SAHN2KFIGYCYNZ6CIAWJEEWXF2QKJKMMJZZ5GNBUN2U6QYWB6ZNR2HVV',
             tokens: {
                 USDC: {
                     // EVM-compatible address for 1inch SDK compatibility only - actual Stellar settlement uses real contract
-                    address: fromEnv.STELLAR_USDC_ADDRESS || '0x0000000000000000000000000000000000000001'
+                    address: fromEnv.STELLAR_USDC_ADDRESS || '0x0000000000000000000000000000000000000001',
+                    // SAC address for custom SUSDC v3 (factory v5-administered)
+                    stellarContractId: 'CCLWDDFJLRCZK3JCVUJVCYEK5EQQFPOQDAPNQWNQFGLKZW2QP6YNWT5G'
                 },
                 XLM: {
                     address: 'native'
