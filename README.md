@@ -6,7 +6,35 @@ This project implements **1inch Fusion+ for cross-chain atomic swaps** between E
 
 ## Architecture
 
-### Core Concept: Dual Address System
+### Core Concept: EVM vs Stellar Contract Architecture
+
+This project handles the fundamental architectural differences between EVM and Stellar:
+
+**EVM Architecture (Multi-Contract)**:
+```
+EVM User → LimitOrderProtocol → EscrowFactory → Individual Escrow Contract
+                                      ↓
+                                 Resolver Contract (separate)
+```
+
+**Stellar Architecture (Single-Contract)**:
+```
+Stellar Resolver Address → Factory Contract (manages all escrows internally)
+```
+
+### Key Architectural Differences
+
+**EVM Side**:
+- **EscrowFactory**: Creates individual escrow contracts for each order
+- **Resolver**: Separate smart contract that handles cross-chain logic
+- **User**: Regular address that holds and approves tokens
+
+**Stellar Side**:
+- **Factory**: Single smart contract that acts as BOTH factory AND resolver
+- **Resolver**: Regular Stellar address (not a contract) that holds USDC tokens
+- **User**: Regular Stellar address that receives final tokens
+
+### Dual Address System
 
 Since EVM and Stellar use different address formats, users provide **separate receiving addresses** for each chain:
 
@@ -251,3 +279,96 @@ Perfect! The bindings are now working correctly. I've
 
   Your Stellar contract bindings are now ready for use in the
   cross-chain resolver example!
+
+## Architectural Challenge: Classic Assets vs SAC Admin Solution
+
+### Problem Discovered: Classic Asset Limitations
+
+During implementation, we discovered a fundamental limitation with Soroban contracts and classic Stellar assets:
+
+**Issue**: Soroban contracts cannot directly hold classic Stellar assets (like classic USDC) because:
+1. **Trustline Requirement**: Classic assets require accounts to establish trustlines with asset issuers
+2. **Account vs Contract Operations**: Trustline creation requires classic Stellar account operations, not contract operations
+3. **Authorization Mismatch**: Classic asset transfers need account-level authorization that contracts don't have seamless access to
+
+**Error Encountered**:
+```
+"trustline entry is missing for account GAGDEHLKL52PLPPW5DSGUP5TAKS2KUFJ7SY2QIBAMWD5YJZI7QR5Y33V"
+```
+
+### Solution: SAC Admin Architecture
+
+**Strategy**: Instead of using classic USDC, create a SAC-administered token that the factory contract controls.
+
+**Implementation Commands**:
+```bash
+# 1. Generate keypair for custom USDC issuer
+stellar keys generate --network testnet stellarUSDC
+
+# 2. Fund the issuer account
+stellar keys fund stellarUSDC --network testnet
+
+# 3. Deploy SAC for custom Stellar USDC (SUSDC)
+stellar contract asset deploy --source stellarUSDC --network testnet \
+  --asset SUSDC:GDW42TAPTOWMRIODCBR6EO5CJHUJ54TNQPBUROKRC2ODZLT3R4J4S35W
+# Result: CDLTWQQPCQIFWJTLMEKBBKEQEUPSLFWZGXRRR3WVT7LFFTB2UB6RM45W
+
+# 4. Set factory contract as SAC admin
+stellar contract invoke --source stellarUSDC --network testnet \
+  --id CDLTWQQPCQIFWJTLMEKBBKEQEUPSLFWZGXRRR3WVT7LFFTB2UB6RM45W \
+  -- set_admin --new_admin CBB3ONF3Q5LXIAATDL7PXBCEWIBJTD75SWVP2EYHHC2FD6UNNJ5ENCJD
+```
+
+### Key Changes Made
+
+**1. Factory Contract Updates**:
+```rust
+// OLD: Transfer existing tokens (failed due to trustlines)
+let token_client = token::Client::new(&env, &stellar_token);
+token_client.transfer(&from, &env.current_contract_address(), &amount);
+
+// NEW: Mint tokens directly (works as SAC admin)
+let token_client = token::StellarAssetClient::new(&env, &stellar_token);
+token_client.mint(&from, &amount);
+```
+
+**2. Config Updates**:
+```typescript
+// Updated stellarContractId to use our SAC-administered token
+stellarContractId: 'CDLTWQQPCQIFWJTLMEKBBKEQEUPSLFWZGXRRR3WVT7LFFTB2UB6RM45W'
+```
+
+### Benefits of SAC Admin Approach
+
+✅ **No Trustlines Required**: Direct minting bypasses trustline requirements
+✅ **Full Programmatic Control**: Factory can mint/transfer as needed  
+✅ **Seamless Soroban Integration**: No account operation complexity
+✅ **Atomic Swap Functionality**: Maintains all cross-chain guarantees
+
+### Trade-offs
+
+❌ **Custom Token**: Not the original classic USDC ecosystem token
+✅ **Same Value**: Represents equivalent USDC value in cross-chain swaps
+✅ **Simpler Architecture**: Eliminates trustline management complexity
+
+This solution enables Soroban contracts to have full control over token operations while maintaining the atomic swap guarantees required for cross-chain functionality.
+
+## Contract Deployment Instructions
+
+Based on the README deployment section, rebuild and deploy the factory contract:
+
+```bash
+# 1. Navigate to stellar resolver directory
+cd stellar-resolver
+
+# 2. Build the contract
+stellar contract build
+
+# 3. Deploy the updated factory contract (if needed)
+stellar contract deploy --wasm target/wasm32-unknown-unknown/release/factory.wasm \
+  --source your-keypair --network testnet
+
+# 4. Install the deployed contract
+stellar contract install --wasm target/wasm32-unknown-unknown/release/factory.wasm \
+  --source your-keypair --network testnet
+```

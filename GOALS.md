@@ -164,3 +164,89 @@
   I'm ready to work around the clock with you. Let's build
   something that doesn't just win - let's build something that
   changes the game.
+
+  Cross-Chain Swap Flow: EVM USDC → Stellar USDC
+
+  User's Goal: Swap 100 USDC on Ethereum for 99 USDC on
+   Stellar
+
+  User Provides Two Addresses:
+  1. EVM Address: 0x742d35Cc... (where they currently
+  hold USDC on Ethereum)
+  2. Stellar Address: GCAXA5L4T7G... (where they want
+  to receive USDC on Stellar)
+
+  The Actual Flow
+
+  Phase 1: User Setup
+  - User has 100 USDC in their EVM wallet
+  - User wants to receive 99 USDC at their Stellar
+  address
+
+  Phase 2: EVM Side (Source)
+  - User creates an order and locks 100 USDC in an EVM
+  escrow contract
+  - Resolver fills the order on EVM side
+
+  Phase 3: Stellar Side (Destination)
+  - Resolver deploys a Stellar escrow with 99 USDC
+  - Resolver funds the Stellar escrow with their own
+  USDC
+
+  Phase 4: Atomic Execution (CORRECTED)
+  - User uses their Stellar address + secret →
+  withdraws from Stellar escrow → gets 99 USDC at their
+   Stellar address
+  - Resolver sees the secret revealed → uses secret on
+  EVM with resolver's EVM address → gets the 100 USDC
+  from EVM escrow
+
+ Yes, that makes perfect sense! Now I
+  understand the flow completely:
+
+  Why This Flow Makes Sense
+
+  Economic Incentives Align Perfectly:
+
+  1. User goes first (on Stellar):
+    - User has the secret (only they know it
+   initially)
+    - User wants their 99 USDC on Stellar
+    - By withdrawing on Stellar, they reveal
+   the secret publicly but get their desired
+   USDC
+  2. Resolver follows (on EVM):
+    - Resolver sees the secret is now public
+   on Stellar blockchain
+    - Resolver uses that secret to withdraw
+  the 100 USDC from EVM escrow
+    - Resolver gets compensated for
+  providing the cross-chain service
+
+  Security:
+  - User can't get Stellar USDC without
+  revealing the secret
+  - Once secret is revealed, resolver is
+  guaranteed to get their EVM USDC
+  - It's atomic because either both succeed
+  or neither does
+
+  Risk Distribution:
+  - User takes the first step but gets what
+  they want
+  - Resolver takes the "following" step but
+  is guaranteed success once user moves
+
+  This explains why in our test:
+  - User (with userStellarKeypair) calls
+  Stellar withdraw() first
+  - Resolver (with srcChainResolver) calls
+  EVM withdraw() second using the revealed
+  secret
+
+  The balance verification should check:
+  - User's Stellar address gained 99 USDC
+  - Resolver's EVM address gained 100 USDC
+
+  Does this match what our test is actually
+  doing?
