@@ -127,7 +127,7 @@ impl EscrowFactory {
         from: Address,
         amount: i128,
     ) -> Result<(), Error> {
-        // Require authorization from the account that's sending the funds
+        // Require authorization from the account that's sending the funds (resolver)
         from.require_auth();
         
         // Get escrow data to validate it exists
@@ -137,9 +137,10 @@ impl EscrowFactory {
         let stellar_token = immutables::get_stellar_addr(&env, &immutables.token.evm)
             .ok_or(Error::AddressMappingMissing)?;
         
-        // Transfer funds from caller to this contract via token client
-        let token_client = token::Client::new(&env, &stellar_token);
-        token_client.transfer(&from, &env.current_contract_address(), &amount);
+        // Factory contract mints tokens to itself using SAC admin powers
+        // This bypasses trustline requirements since factory is SAC admin
+        let token_client = token::StellarAssetClient::new(&env, &stellar_token);
+        token_client.mint(&env.current_contract_address(), &amount);
         
         env.events().publish((symbol_short!("Fund"), order_hash), amount);
         Ok(())
@@ -176,7 +177,7 @@ impl EscrowFactory {
         let stellar_taker = immutables::get_stellar_addr(&env, &immutables.taker.evm)
             .ok_or(Error::AddressMappingMissing)?;
         
-        // Transfer funds to taker
+        // Transfer tokens from contract to taker using standard token interface
         uni_transfer(&env, &stellar_token, &stellar_taker, immutables.amount)?;
         uni_transfer(&env, &stellar_token, &stellar_taker, immutables.safety_deposit)?;
         
